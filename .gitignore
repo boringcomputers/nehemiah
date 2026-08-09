@@ -30,7 +30,7 @@ vite.config.ts.timestamp-*
 test-results
 
 # Go build output
-/boringd/boringd
+/nehemiahd/nehemiahd
 *.test
 
 # SDK build output

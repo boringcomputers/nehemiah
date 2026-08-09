@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 
 	// A self-contained, looping simulation of the real thing for the static
-	// showcase: boot a computer (curl → kernel log → BORING_READY), type a task
+	// showcase: boot a computer (curl → kernel log → NEHEMIAH_READY), type a task
 	// into the AI box, watch the agent build it, then play the snake game it
 	// shipped. Every line is lifted from actual runs — this is what the
 	// interactive console does for real in local dev.
@@ -25,7 +25,7 @@
 		['[    0.312904] virtio-mmio: probing devices', 'text-ink-faint'],
 		['[    0.398112] EXT4-fs (vda): mounted filesystem without journal', 'text-ink-faint'],
 		['[    0.412086] Run /sbin/boring-init as init process', 'text-ink-faint'],
-		['BORING_READY', 'text-success'],
+		['NEHEMIAH_READY', 'text-success'],
 		['# desktop up · claude · codex · cursor · pi preinstalled', 'text-ink-muted']
 	];
 	const AGENT: Array<[string, string]> = [

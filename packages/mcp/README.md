@@ -1,8 +1,8 @@
-# boring-computers-mcp
+# nehemiah-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that lets any AI spin up and
 drive a real Linux computer — a Firecracker microVM from
-[boring computers](https://boringcomputers.com).
+[Nehemiah](https://boringcomputers.com).
 
 Tools: `launch_computer` (built-ins or your published templates),
 `run_command` (run one shell command, get output + exit code back —
@@ -14,16 +14,16 @@ approach in each), `publish_computer` (freeze a computer as a named template
 that boots in milliseconds), `list_templates`, `list_computers`,
 `stop_computer`.
 
-It talks to **your own boringd** — there is no public hosted endpoint. Set
-`BORING_URL` to wherever yours runs (defaults to `http://localhost:8080`, which
-is right if boringd is on the same machine or reached over an SSH tunnel; the
-Mac/Lima local setup forwards to `http://localhost:8088`). If your boringd sets
-`BORING_TOKEN`, pass the same value so the server can authenticate.
+It talks to **your own nehemiahd** — there is no public hosted endpoint. Set
+`NEHEMIAH_URL` to wherever yours runs (defaults to `http://localhost:8080`, which
+is right if nehemiahd is on the same machine or reached over an SSH tunnel; the
+Mac/Lima local setup forwards to `http://localhost:8088`). If your nehemiahd sets
+`NEHEMIAH_TOKEN`, pass the same value so the server can authenticate.
 
 ## Run
 
 ```bash
-BORING_URL=http://localhost:8080 npx boring-computers-mcp
+NEHEMIAH_URL=http://localhost:8080 npx nehemiah-mcp
 ```
 
 (Or from the monorepo source: `node packages/mcp/index.mjs`.)
@@ -36,10 +36,10 @@ _"launch a computer and build me a snake game."_
 ```json
 {
 	"mcpServers": {
-		"boring-computers": {
+		"nehemiah": {
 			"command": "npx",
-			"args": ["-y", "boring-computers-mcp"],
-			"env": { "BORING_URL": "http://localhost:8080" }
+			"args": ["-y", "nehemiah-mcp"],
+			"env": { "NEHEMIAH_URL": "http://localhost:8080" }
 		}
 	}
 }

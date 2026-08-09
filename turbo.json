@@ -4,7 +4,7 @@
 	"tasks": {
 		"build": {
 			"dependsOn": ["^build"],
-			"env": ["PUBLIC_BORING_URL"],
+			"env": ["PUBLIC_NEHEMIAH_URL", "PUBLIC_BORING_URL"],
 			"outputs": [".svelte-kit/**", "build/**", ".vercel/**", "dist/**"]
 		},
 		"dev": {

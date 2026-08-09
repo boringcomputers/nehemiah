@@ -36,7 +36,7 @@ func NewCgroups(cfg Config) *Cgroups {
 }
 
 func (c *Cgroups) setup() error {
-	// boringd's own cgroup, e.g. "0::/system.slice/boringd.service".
+	// nehemiahd's own cgroup, e.g. "0::/system.slice/nehemiahd.service".
 	data, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		return err
@@ -107,7 +107,7 @@ func (c *Cgroups) Remove(id string) {
 }
 
 // jailerParentCgroup returns the cgroup (relative to the cgroup v2 root) under
-// which the jailer should create each microvm's cgroup: boringd's own delegated
+// which the jailer should create each microvm's cgroup: nehemiahd's own delegated
 // cgroup, minus the "main" leaf we moved ourselves into. Empty if unavailable.
 func jailerParentCgroup() string {
 	data, err := os.ReadFile("/proc/self/cgroup")

@@ -1,14 +1,14 @@
 import { env } from '$env/dynamic/public';
 
-// In production, set PUBLIC_BORING_URL to your own boringd endpoint so the
+// In production, set PUBLIC_NEHEMIAH_URL to your own nehemiahd endpoint so the
 // browser talks to it directly. In dev it's unset and requests go through the
 // Vite `/boring` proxy (default target http://localhost:8080).
-const PUB = env.PUBLIC_BORING_URL ?? '';
+const PUB = env.PUBLIC_NEHEMIAH_URL ?? env.PUBLIC_BORING_URL ?? '';
 
 /** Base for REST calls: the public endpoint in prod, the `/boring` proxy in dev. */
 export const apiBase = PUB || '/boring';
 
-/** Build a ws(s):// URL for a boringd WebSocket path (e.g. /v1/machines/ID/tty). */
+/** Build a ws(s):// URL for a nehemiahd WebSocket path (e.g. /v1/machines/ID/tty). */
 export function wsUrl(path: string): string {
 	if (PUB) return PUB.replace(/^http/, 'ws') + path;
 	const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -83,7 +83,7 @@ export async function branchMachine(id: string): Promise<Machine> {
 
 /**
  * Browser-openable URL for a port running inside a machine, reverse-proxied by
- * boringd. Path-based (not a subdomain), so it works over the dev tunnel and on
+ * nehemiahd. Path-based (not a subdomain), so it works over the dev tunnel and on
  * public deployments without wildcard DNS.
  */
 export function previewUrl(id: string, port: number): string {

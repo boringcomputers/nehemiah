@@ -1,0 +1,37 @@
+[Unit]
+Description=nehemiahd — Firecracker microVM sandbox daemon (Nehemiah)
+Documentation=https://github.com/boringcomputers/nehemiah
+After=network.target
+Wants=network.target
+# The pre-rename unit ExecStarts the same daemon on the same port, so a host
+# upgraded in place must never run both.
+Conflicts=boringd.service
+
+[Service]
+Type=simple
+# Config (NEHEMIAH_TOKEN, NEHEMIAH_MAX, ...) is read from these env files.
+# Leading '-' makes each optional so nehemiahd still starts with no token set.
+# The legacy file is read first so the current one wins on any overlap; the
+# daemon also accepts the old BORING_* variable names (see getenv in config.go).
+EnvironmentFile=-/etc/boring/boringd.env
+EnvironmentFile=-/etc/boring/nehemiahd.env
+ExecStart=/usr/local/bin/nehemiahd
+WorkingDirectory=/opt/boring
+Restart=always
+RestartSec=2
+# nehemiahd launches firecracker children which need /dev/kvm and unix sockets.
+# It runs as root for the prototype (jailer/unprivileged is a hardening TODO).
+User=root
+Group=root
+# Give firecracker room for per-VM sockets/overlays and pipes.
+LimitNOFILE=1048576
+LimitNPROC=65536
+# Delegate the cgroup subtree so nehemiahd can put each firecracker child in a
+# per-VM cgroup with CPU/memory/pids caps (untrusted-guest resource control).
+Delegate=yes
+# Keep the working state on the box.
+RuntimeDirectory=boring
+StateDirectory=boring
+
+[Install]
+WantedBy=multi-user.target

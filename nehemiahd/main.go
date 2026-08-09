@@ -21,10 +21,10 @@ func main() {
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
-	log.SetPrefix("boringd ")
+	log.SetPrefix("nehemiahd ")
 
 	// Clean up any VMs/artifacts orphaned by a previous unclean exit before we
-	// start booting new ones (boringd starts with an empty map, so anything
+	// start booting new ones (nehemiahd starts with an empty map, so anything
 	// present is stale).
 	reapOrphans(cfg)
 

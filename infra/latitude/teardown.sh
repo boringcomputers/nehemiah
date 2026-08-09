@@ -65,7 +65,7 @@ fi
 cat <<EOF
 ================================================================================
   DESTRUCTIVE: this DELETES Latitude.sh server '${SERVER_ID}' and STOPS billing.
-  Everything on the box (VMs, snapshots, rootfs, boringd) is permanently lost.
+  Everything on the box (VMs, snapshots, rootfs, nehemiahd) is permanently lost.
 ================================================================================
 EOF
 printf 'Type "yes" to delete server %s: ' "${SERVER_ID}"

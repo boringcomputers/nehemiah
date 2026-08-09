@@ -25,7 +25,7 @@
 </script>
 
 <svelte:head>
-	<title>a shared computer · boring computers</title>
+	<title>a shared computer · Nehemiah</title>
 </svelte:head>
 
 {#if status === 'desktop'}

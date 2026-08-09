@@ -175,7 +175,7 @@ type createRequest struct {
 	TTLSeconds int    `json:"ttl_seconds"`
 	Net        bool   `json:"net"`        // request internet (forces a cold boot)
 	Volume     string `json:"volume"`     // restore this volume into /root on boot
-	Persistent bool   `json:"persistent"` // no TTL — run until stopped (needs BORING_ALLOW_PERSISTENT)
+	Persistent bool   `json:"persistent"` // no TTL — run until stopped (needs NEHEMIAH_ALLOW_PERSISTENT)
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {

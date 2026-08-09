@@ -1,5 +1,5 @@
 {
-	"name": "@boring/eslint-config",
+	"name": "@nehemiah/eslint-config",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",

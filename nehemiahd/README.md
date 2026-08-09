@@ -1,8 +1,8 @@
-# boringd
+# nehemiahd
 
-Control plane for **boring computers** — a Firecracker microVM sandbox platform.
+Control plane for **Nehemiah** — a Firecracker microVM sandbox platform.
 
-`boringd` is a single Go binary that manages Firecracker microVMs on one bare-metal
+`nehemiahd` is a single Go binary that manages Firecracker microVMs on one bare-metal
 Ubuntu 24.04 host (x86_64 or arm64) with `/dev/kvm`. It exposes a REST API to create/list/delete/fork
 microVMs, WebSocket endpoints for a live serial shell, a VNC desktop, and AI agents that
 drive them, plus guest internet, port previews, file transfer, and an OpenAI-compatible
@@ -10,22 +10,22 @@ inference gateway.
 
 ## How it works
 
-Each machine is one `firecracker` child process launched by boringd:
+Each machine is one `firecracker` child process launched by nehemiahd:
 
 ```
 firecracker --api-sock /opt/boring/run/<id>.sock --id <id>
 ```
 
-boringd owns the child's **stdin/stdout** pipes. The guest kernel boots with
+nehemiahd owns the child's **stdin/stdout** pipes. The guest kernel boots with
 `console=ttyS0`, so the guest serial console is wired to firecracker's stdio:
 
-- bytes boringd writes to child **stdin**  → guest `/dev/ttyS0` (shell input)
+- bytes nehemiahd writes to child **stdin**  → guest `/dev/ttyS0` (shell input)
 - bytes the child writes to **stdout**     → guest serial console (shell output)
 
 A per-machine **Console** runs one pump goroutine that reads the child's stdout, keeps a
 bounded scrollback buffer, and fans each chunk out to every subscriber. The boot-timer and
 every WebSocket client subscribe to the same stream, so nobody misses bytes. `boot_ms` is
-measured from just-before `InstanceStart` until the guest prints `BORING_READY` on serial.
+measured from just-before `InstanceStart` until the guest prints `NEHEMIAH_READY` on serial.
 
 Cold boot is the guaranteed path. Snapshot restore (`mode:"snapshot"`) and `branch` (fork
 from a live snapshot) are best-effort optimizations that fall back cleanly.
@@ -60,7 +60,7 @@ from a live snapshot) are best-effort optimizations that fall back cleanly.
 | PUT/GET/DELETE | `/v1/volumes/{id}/file?path=` | upload / download / delete a file |
 | POST | `/v1/machines/{id}/save?volume=` | save a machine's /root into a volume |
 
-Preview: a Host of `<id>--<port>.<BORING_PREVIEW_BASE>` reverse-proxies to the guest's
+Preview: a Host of `<id>--<port>.<NEHEMIAH_PREVIEW_BASE>` reverse-proxies to the guest's
 port (see `preview.go`); `GET /internal/tls-check` gates Caddy on-demand TLS.
 
 `<machine>` = `{"id","status","mode","boot_ms","template","created_at","expires_at"}`.
@@ -68,54 +68,54 @@ port (see `preview.go`); `GET /internal/tls-check` gates Caddy on-demand TLS.
 
 ## Auth
 
-If `BORING_TOKEN` is set, all `/v1/*` routes require `Authorization: Bearer <token>`.
+If `NEHEMIAH_TOKEN` is set, all `/v1/*` routes require `Authorization: Bearer <token>`.
 The WebSocket route also accepts `?token=<token>`. `/healthz` is always open.
 
 ## Environment variables
 
 | Var | Default | Meaning |
 | --- | --- | --- |
-| `BORING_TOKEN` | *(unset)* | Bearer token; empty disables auth |
-| `BORING_MAX` | `20` | max live machines (429 when full) |
-| `BORING_MAX_TEMPLATES` | `10` | max user-published templates (`/publish`); `0` disables publishing |
-| `BORING_MAX_FORKS` | `8` | max clones per fleet fork (`branch?count=N`) |
-| `BORING_ALLOW_PERSISTENT` | `0` | `1` honors `"persistent": true` (no-TTL machines that run until deleted). Off by default so a public instance can't be drained. |
-| `BORING_MEM_RESERVE_MB` | `3072` | host RAM kept free; boot refused (429) rather than OOM the box (0 disables) |
-| `BORING_FIRECRACKER_BIN` | `/opt/boring/bin/firecracker` | firecracker binary |
-| `BORING_KERNEL` | `/opt/boring/kernel/vmlinux` | uncompressed kernel |
-| `BORING_ROOTFS` | `/opt/boring/rootfs/rootfs.ext4` | base rootfs |
-| `BORING_TEMPLATES` | `/opt/boring/templates` | snapshot template dir |
-| `BORING_RUN` | `/opt/boring/run` | per-machine sockets/overlays |
-| `BORING_NET` | `0` | `1` enables guest internet (per-VM NIC + NAT; see `infra/latitude/net-setup.sh`) |
-| `BORING_NET_BRIDGE` | `boring0` | host bridge for guest taps |
-| `BORING_NET_SUBNET` | `10.200.0` | guest /24 prefix (gateway `.1`) |
-| `BORING_DESKTOP_POOL` | `1` | warm desktops kept pre-booted for instant launch |
-| `BORING_PREVIEW_BASE` | *(unset)* | wildcard host for previews, e.g. `previews.example.com`; unset disables |
-| `BORING_LEASES` | `/var/lib/misc/dnsmasq.leases` | dnsmasq lease file, for guest IP lookup |
-| `BORING_ANTHROPIC_KEY` | *(unset)* | powers the agents + the gateway's Claude path |
-| `BORING_OPENROUTER_KEY` | *(unset)* | powers the gateway's non-Claude models |
-| `BORING_AGENT_MODEL` | `claude-opus-4-8` | model for the computer-use / terminal agents |
-| `BORING_AGENT_MAX_STEPS` | `18` | agent step cap (cost guard) |
-| `BORING_AGENT_MAX_CONCURRENT` | `2` | simultaneous agent runs (cost guard) |
-| `BORING_INFER_MAX_TOKENS` | `1024` | `max_tokens` clamp on the gateway |
-| `BORING_INFER_RATE` | `20` | gateway requests/min per IP |
-| `BORING_DAILY_AGENT_MAX` | `200` | global daily cap on agent runs (cost circuit breaker; 0 disables) |
-| `BORING_DAILY_INFER_MAX` | `3000` | global daily cap on inference requests (0 disables) |
-| `BORING_S3_ENDPOINT` | *(unset)* | S3 host:port for volumes (MinIO/Latitude); unset disables storage |
-| `BORING_S3_KEY` / `BORING_S3_SECRET` | *(unset)* | S3 access key + secret |
-| `BORING_S3_BUCKET` | `boring-volumes` | bucket that holds all volumes |
-| `BORING_S3_SSL` | `0` | `1` for an https S3 endpoint |
-| `BORING_VOLUME_QUOTA_MB` | `256` | per-volume size cap |
-| `BORING_VOLUME_TTL` / `_MAX` | `86400` / `604800` | default / max volume lifetime (s) |
-| `BORING_VOLUME_RATE` | `10` | volume creations/min per IP |
+| `NEHEMIAH_TOKEN` | *(unset)* | Bearer token; empty disables auth |
+| `NEHEMIAH_MAX` | `20` | max live machines (429 when full) |
+| `NEHEMIAH_MAX_TEMPLATES` | `10` | max user-published templates (`/publish`); `0` disables publishing |
+| `NEHEMIAH_MAX_FORKS` | `8` | max clones per fleet fork (`branch?count=N`) |
+| `NEHEMIAH_ALLOW_PERSISTENT` | `0` | `1` honors `"persistent": true` (no-TTL machines that run until deleted). Off by default so a public instance can't be drained. |
+| `NEHEMIAH_MEM_RESERVE_MB` | `3072` | host RAM kept free; boot refused (429) rather than OOM the box (0 disables) |
+| `NEHEMIAH_FIRECRACKER_BIN` | `/opt/boring/bin/firecracker` | firecracker binary |
+| `NEHEMIAH_KERNEL` | `/opt/boring/kernel/vmlinux` | uncompressed kernel |
+| `NEHEMIAH_ROOTFS` | `/opt/boring/rootfs/rootfs.ext4` | base rootfs |
+| `NEHEMIAH_TEMPLATES` | `/opt/boring/templates` | snapshot template dir |
+| `NEHEMIAH_RUN` | `/opt/boring/run` | per-machine sockets/overlays |
+| `NEHEMIAH_NET` | `0` | `1` enables guest internet (per-VM NIC + NAT; see `infra/latitude/net-setup.sh`) |
+| `NEHEMIAH_NET_BRIDGE` | `boring0` | host bridge for guest taps |
+| `NEHEMIAH_NET_SUBNET` | `10.200.0` | guest /24 prefix (gateway `.1`) |
+| `NEHEMIAH_DESKTOP_POOL` | `1` | warm desktops kept pre-booted for instant launch |
+| `NEHEMIAH_PREVIEW_BASE` | *(unset)* | wildcard host for previews, e.g. `previews.example.com`; unset disables |
+| `NEHEMIAH_LEASES` | `/var/lib/misc/dnsmasq.leases` | dnsmasq lease file, for guest IP lookup |
+| `NEHEMIAH_ANTHROPIC_KEY` | *(unset)* | powers the agents + the gateway's Claude path |
+| `NEHEMIAH_OPENROUTER_KEY` | *(unset)* | powers the gateway's non-Claude models |
+| `NEHEMIAH_AGENT_MODEL` | `claude-opus-4-8` | model for the computer-use / terminal agents |
+| `NEHEMIAH_AGENT_MAX_STEPS` | `18` | agent step cap (cost guard) |
+| `NEHEMIAH_AGENT_MAX_CONCURRENT` | `2` | simultaneous agent runs (cost guard) |
+| `NEHEMIAH_INFER_MAX_TOKENS` | `1024` | `max_tokens` clamp on the gateway |
+| `NEHEMIAH_INFER_RATE` | `20` | gateway requests/min per IP |
+| `NEHEMIAH_DAILY_AGENT_MAX` | `200` | global daily cap on agent runs (cost circuit breaker; 0 disables) |
+| `NEHEMIAH_DAILY_INFER_MAX` | `3000` | global daily cap on inference requests (0 disables) |
+| `NEHEMIAH_S3_ENDPOINT` | *(unset)* | S3 host:port for volumes (MinIO/Latitude); unset disables storage |
+| `NEHEMIAH_S3_KEY` / `NEHEMIAH_S3_SECRET` | *(unset)* | S3 access key + secret |
+| `NEHEMIAH_S3_BUCKET` | `boring-volumes` | bucket that holds all volumes |
+| `NEHEMIAH_S3_SSL` | `0` | `1` for an https S3 endpoint |
+| `NEHEMIAH_VOLUME_QUOTA_MB` | `256` | per-volume size cap |
+| `NEHEMIAH_VOLUME_TTL` / `_MAX` | `86400` / `604800` | default / max volume lifetime (s) |
+| `NEHEMIAH_VOLUME_RATE` | `10` | volume creations/min per IP |
 
 TTL is clamped to `[15, 900]` seconds, default `120`.
 
 ## Run
 
 ```sh
-go build -o boringd ./...
-BORING_TOKEN=secret ./boringd            # listens on 0.0.0.0:8080
+go build -o nehemiahd ./...
+NEHEMIAH_TOKEN=secret ./nehemiahd            # listens on 0.0.0.0:8080
 ```
 
 Flags: `-addr` (default `0.0.0.0:8080`), `-max`.

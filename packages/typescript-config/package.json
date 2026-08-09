@@ -1,5 +1,5 @@
 {
-	"name": "@boring/typescript-config",
+	"name": "@nehemiah/typescript-config",
 	"version": "0.0.0",
 	"private": true,
 	"files": ["base.json", "svelte.json"]

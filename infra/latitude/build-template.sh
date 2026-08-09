@@ -4,14 +4,14 @@
 #
 #   sudo bash build-template.sh [template_name]     (default: python)
 #
-# Boots a microVM from the base kernel + rootfs, waits for the BORING_READY
+# Boots a microVM from the base kernel + rootfs, waits for the NEHEMIAH_READY
 # marker on the guest serial console, pauses the VM, and takes a Full snapshot
 # into /opt/boring/templates/<name>/ :
 #     snapshot_file   (VM state)
 #     mem_file        (guest memory)
 #     rootfs.ext4     (copy of the rootfs used for the snapshot)
 #
-# This is BEST-EFFORT / OPTIONAL. boringd falls back to cold boot when a
+# This is BEST-EFFORT / OPTIONAL. nehemiahd falls back to cold boot when a
 # template is missing or a restore fails. A failure here is not catastrophic.
 #
 set -euo pipefail
@@ -19,13 +19,13 @@ set -euo pipefail
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
-BORING_ROOT="/opt/boring"
-BIN="${BORING_ROOT}/bin/firecracker"
-KERNEL="${BORING_ROOT}/kernel/vmlinux"
-BASE_ROOTFS="${BORING_ROOT}/rootfs/rootfs.ext4"
+NEHEMIAH_ROOT="/opt/boring"
+BIN="${NEHEMIAH_ROOT}/bin/firecracker"
+KERNEL="${NEHEMIAH_ROOT}/kernel/vmlinux"
+BASE_ROOTFS="${NEHEMIAH_ROOT}/rootfs/rootfs.ext4"
 
 TEMPLATE_NAME="${1:-python}"
-OUT_DIR="${BORING_ROOT}/templates/${TEMPLATE_NAME}"
+OUT_DIR="${NEHEMIAH_ROOT}/templates/${TEMPLATE_NAME}"
 
 BOOT_ARGS="console=ttyS0 reboot=k panic=1 pci=off i8042.noaux i8042.nomux random.trust_cpu=on"
 VCPU_COUNT="${VCPU_COUNT:-1}"
@@ -51,7 +51,7 @@ WORK="$(mktemp -d /tmp/boring-template.XXXXXX)"
 SOCK="${WORK}/fc.sock"
 STDOUT_LOG="${WORK}/console.log"
 # Boot (and snapshot) from the template's OWN stable rootfs path so the path
-# baked into the snapshot still exists at restore time. boringd restores by
+# baked into the snapshot still exists at restore time. nehemiahd restores by
 # loading the snapshot, then rebinding the drive to a per-machine overlay.
 WORK_ROOTFS="${OUT_DIR}/rootfs.ext4"
 FC_PID=""
@@ -94,7 +94,7 @@ wait_for_socket() {
 wait_for_ready() {
   local deadline=$(( $(date +%s) + READY_TIMEOUT_S ))
   while [ "$(date +%s)" -lt "${deadline}" ]; do
-    if grep -q "BORING_READY" "${STDOUT_LOG}" 2>/dev/null; then
+    if grep -q "NEHEMIAH_READY" "${STDOUT_LOG}" 2>/dev/null; then
       return 0
     fi
     # Bail early if firecracker died.
@@ -144,13 +144,13 @@ log "Starting instance..."
 api PUT /actions '{"action_type":"InstanceStart"}' >/dev/null
 
 # --------------------------------------------------------------------------
-# 4. Wait for BORING_READY
+# 4. Wait for NEHEMIAH_READY
 # --------------------------------------------------------------------------
-log "Waiting for BORING_READY (timeout ${READY_TIMEOUT_S}s)..."
+log "Waiting for NEHEMIAH_READY (timeout ${READY_TIMEOUT_S}s)..."
 if ! wait_for_ready; then
-  warn "Guest never reported BORING_READY. Console tail:"
+  warn "Guest never reported NEHEMIAH_READY. Console tail:"
   tail -n 30 "${STDOUT_LOG}" >&2 || true
-  die "template build aborted (best-effort; boringd will cold boot)"
+  die "template build aborted (best-effort; nehemiahd will cold boot)"
 fi
 log "Guest is ready."
 
@@ -169,7 +169,7 @@ api PUT /snapshot/create \
   "{\"snapshot_type\":\"Full\",\"snapshot_path\":\"${SNAP_FILE}\",\"mem_file_path\":\"${MEM_FILE}\"}" >/dev/null
 
 # rootfs already lives at ${OUT_DIR}/rootfs.ext4 (we booted from it), and that is
-# the exact path baked into the snapshot — boringd loads the snapshot then
+# the exact path baked into the snapshot — nehemiahd loads the snapshot then
 # rebinds the drive to a per-machine overlay copied from this file.
 
 # --------------------------------------------------------------------------
@@ -191,4 +191,4 @@ log "Template '${TEMPLATE_NAME}' built:"
 log "  ${SNAP_FILE}       ($(du -h "${SNAP_FILE}" | cut -f1))"
 log "  ${MEM_FILE}        ($(du -h "${MEM_FILE}" | cut -f1))"
 log "  ${OUT_DIR}/rootfs.ext4 ($(du -h "${OUT_DIR}/rootfs.ext4" | cut -f1))"
-log "Done. boringd can now restore mode=snapshot for template '${TEMPLATE_NAME}'."
+log "Done. nehemiahd can now restore mode=snapshot for template '${TEMPLATE_NAME}'."

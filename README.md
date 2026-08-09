@@ -1,6 +1,6 @@
-# boring computers
+# Nehemiah
 
-[![CI](https://github.com/michaelshimeles/boring-computers/actions/workflows/ci.yml/badge.svg)](https://github.com/michaelshimeles/boring-computers/actions/workflows/ci.yml)
+[![CI](https://github.com/boringcomputers/nehemiah/actions/workflows/ci.yml/badge.svg)](https://github.com/boringcomputers/nehemiah/actions/workflows/ci.yml)
 
 **On-demand Linux computers you can hand to an AI.**
 
@@ -14,9 +14,9 @@ thing yourself.
 !["build a snake game I can play" → a warm desktop boots in seconds, the AI writes and serves the game, and you play it at a live URL](docs/demo.gif)
 
 <details>
-<summary>What a boring computer looks like</summary>
+<summary>What a Nehemiah machine looks like</summary>
 
-![A boring computer: a live desktop with a browser and calculator, a terminal with claude/codex/cursor/pi preinstalled, and an AI build box](docs/hero.png)
+![A Nehemiah machine: a live desktop with a browser and calculator, a terminal with claude/codex/cursor/pi preinstalled, and an AI build box](docs/hero.png)
 
 </details>
 
@@ -45,14 +45,14 @@ just your Mac**:
 
 **On a Linux box** — Ubuntu 24.04, **x86_64 or arm64**, with `/dev/kvm`
 (bare-metal, or a VM with nested virtualization) that you can root-SSH into. One
-command turns it into a running boringd:
+command turns it into a running nehemiahd:
 
 ```sh
-git clone https://github.com/michaelshimeles/boring-computers
-cd boring-computers && npm install
+git clone https://github.com/boringcomputers/nehemiah
+cd nehemiah && npm install
 
-# set it up on your box (installs Firecracker, builds the images, runs boringd)
-BORING_ANTHROPIC_KEY=sk-ant-...  ./infra/setup.sh root@YOUR_BOX_IP
+# set it up on your box (installs Firecracker, builds the images, runs nehemiahd)
+NEHEMIAH_ANTHROPIC_KEY=sk-ant-...  ./infra/setup.sh root@YOUR_BOX_IP
 ```
 
 Don't have a box? If you use [Latitude.sh](https://latitude.sh),
@@ -65,8 +65,8 @@ microVMs boot on your laptop (a shell restores from snapshot in ~5 ms):
 
 ```sh
 brew install lima
-BORING_ANTHROPIC_KEY=sk-ant-...  ./infra/local/setup-local.sh
-# boringd is now at http://localhost:8088 — details in infra/local/README.md
+NEHEMIAH_ANTHROPIC_KEY=sk-ant-...  ./infra/local/setup-local.sh
+# nehemiahd is now at http://localhost:8088 — details in infra/local/README.md
 ```
 
 (Windows 11 via WSL2 is designed but not yet wired up — see
@@ -76,41 +76,41 @@ Then run the site against it:
 
 ```sh
 # apps/web/.env
-PUBLIC_BORING_URL=http://YOUR_BOX_IP:8080   # or a tunnel — see apps/web/.env.example
+PUBLIC_NEHEMIAH_URL=http://YOUR_BOX_IP:8080   # or a tunnel — see apps/web/.env.example
 npm run dev -w web
 ```
 
-`setup.sh` options (env): `BORING_TOKEN` (require auth), `BORING_S3_*`
+`setup.sh` options (env): `NEHEMIAH_TOKEN` (require auth), `NEHEMIAH_S3_*`
 (persistent volumes), `BIND_LOCALHOST=1` (reach it only via SSH tunnel — most
 private), `SKIP_DESKTOP=1` (skip the ~8-min desktop image). Full REST + WebSocket
 API in the [docs](https://boringcomputers.com/docs).
 
 **From any AI** — an MCP server
-([`boring-computers-mcp`](packages/mcp)) lets Claude Desktop, Cursor, and other
+([`nehemiah-mcp`](packages/mcp)) lets Claude Desktop, Cursor, and other
 agents spin up and drive your computers as a tool:
 
 ```json
 {
 	"mcpServers": {
-		"boring-computers": {
+		"nehemiah": {
 			"command": "npx",
-			"args": ["-y", "boring-computers-mcp"],
-			"env": { "BORING_URL": "http://localhost:8080" }
+			"args": ["-y", "nehemiah-mcp"],
+			"env": { "NEHEMIAH_URL": "http://localhost:8080" }
 		}
 	}
 }
 ```
 
 There's also an Effect-native TypeScript client,
-[`boring-computers-sdk`](packages/sdk) (`npm install boring-computers-sdk`).
+[`nehemiah-sdk`](packages/sdk) (`npm install nehemiah-sdk`).
 
 ## How it works
 
 Real hardware-virtualized isolation — a kernel per machine, not a shared
 container. Each VM is jailed and resource-capped, restored from a memory
 snapshot in ~3 ms, and self-destructs on a TTL (or runs until you stop it, when
-the server enables `BORING_ALLOW_PERSISTENT`). Guests are network-isolated
-behind an egress firewall. The control plane is [`boringd/`](boringd) (Go); host
+the server enables `NEHEMIAH_ALLOW_PERSISTENT`). Guests are network-isolated
+behind an egress firewall. The host daemon is [`nehemiahd/`](nehemiahd) (Go); host
 setup is one command ([`infra/setup.sh`](infra/setup.sh)).
 
 ## Repo
@@ -119,9 +119,9 @@ A [Turborepo](https://turbo.build/repo) monorepo (npm workspaces):
 
 ```
 apps/web/          the site — SvelteKit
-boringd/           the control plane — Go, runs the microVMs
-packages/sdk/      boring-computers-sdk — Effect-native TypeScript client
-packages/mcp/      boring-computers-mcp — MCP server
+nehemiahd/           the host daemon — Go, runs the microVMs
+packages/sdk/      nehemiah-sdk — Effect-native TypeScript client
+packages/mcp/      nehemiah-mcp — MCP server
 infra/setup.sh     one-command host setup (any Ubuntu + KVM box)
 infra/latitude/    rootfs/kernel/image builds, networking, Caddy, Latitude helpers
 ```

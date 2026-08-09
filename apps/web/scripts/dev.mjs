@@ -1,6 +1,6 @@
-// Dev launcher. If BORING_TUNNEL (an SSH host) is set in apps/web/.env, opens an
-// SSH tunnel to a remote boringd first, then runs `vite dev`, and closes the
-// tunnel on exit. With no BORING_TUNNEL set (e.g. a fresh fork), it just runs
+// Dev launcher. If NEHEMIAH_TUNNEL (an SSH host) is set in apps/web/.env, opens an
+// SSH tunnel to a remote nehemiahd first, then runs `vite dev`, and closes the
+// tunnel on exit. With no NEHEMIAH_TUNNEL set (e.g. a fresh fork), it just runs
 // vite — so `npm run dev` is one command either way.
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -23,8 +23,8 @@ function readEnv(path) {
 }
 
 const env = { ...readEnv(envPath), ...process.env };
-const tunnelHost = env.BORING_TUNNEL;
-const url = env.BORING_URL || '';
+const tunnelHost = env.NEHEMIAH_TUNNEL;
+const url = env.NEHEMIAH_URL || '';
 
 let tunnel = null;
 if (tunnelHost && url) {
@@ -34,7 +34,7 @@ if (tunnelHost && url) {
 	} catch {
 		/* keep default */
 	}
-	const remote = env.BORING_TUNNEL_REMOTE || 'localhost:8080';
+	const remote = env.NEHEMIAH_TUNNEL_REMOTE || 'localhost:8080';
 	console.log(`\x1b[2m[dev] ssh tunnel localhost:${localPort} -> ${tunnelHost}:${remote}\x1b[0m`);
 	tunnel = spawn(
 		'ssh',

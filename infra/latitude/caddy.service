@@ -1,6 +1,6 @@
 [Unit]
-Description=Caddy (TLS reverse proxy for boringd)
-After=network.target boringd.service
+Description=Caddy (TLS reverse proxy for nehemiahd)
+After=network.target nehemiahd.service
 
 [Service]
 User=caddy
