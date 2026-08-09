@@ -15,7 +15,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// Storage is boring computers' persistent-volume layer, backed by any
+// Storage is Nehemiah's persistent-volume layer, backed by any
 // S3-compatible object store (MinIO in dev, Latitude Object Storage in prod).
 // A "volume" is a prefix in one bucket: vol-<id>/.volume.json holds metadata and
 // vol-<id>/f/<path> holds files. No database — volumes are addressed by an

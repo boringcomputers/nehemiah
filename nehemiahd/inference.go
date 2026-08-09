@@ -64,7 +64,7 @@ func anthropicModelID(model string) string {
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	var data []map[string]any
 	add := func(id string) {
-		data = append(data, map[string]any{"id": id, "object": "model", "owned_by": "boring"})
+		data = append(data, map[string]any{"id": id, "object": "model", "owned_by": "nehemiah"})
 	}
 	if s.cfg.AnthropicKey != "" {
 		add("claude-opus-4-8")
@@ -140,7 +140,7 @@ func (s *Server) proxyOpenRouter(w http.ResponseWriter, req map[string]any) {
 	up.Header.Set("Authorization", "Bearer "+s.cfg.OpenRouterKey)
 	up.Header.Set("Content-Type", "application/json")
 	up.Header.Set("HTTP-Referer", "https://boringcomputers.com")
-	up.Header.Set("X-Title", "boring computers")
+	up.Header.Set("X-Title", "Nehemiah")
 	res, err := (&http.Client{Timeout: 180 * time.Second}).Do(up)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "the model provider is unreachable"})

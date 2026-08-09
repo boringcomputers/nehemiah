@@ -1,4 +1,4 @@
-# Running boring computers locally (Mac & Windows)
+# Running Nehemiah locally (Mac & Windows)
 
 **The Mac path is built and proven** — one command
 ([`setup-local.sh`](setup-local.sh)) turns an Apple Silicon Mac into a boring
@@ -6,7 +6,7 @@ computers host (in a Lima nested-virt VM), and a real arm64 Firecracker microVM
 boots on it in **~5 ms**. Windows is designed but not yet wired up (it's the
 easier path — see below).
 
-boringd runs Firecracker microVMs, which need **Linux + a functional `/dev/kvm`**.
+nehemiahd runs Firecracker microVMs, which need **Linux + a functional `/dev/kvm`**.
 Neither macOS nor Windows provides that natively, but both can host a Linux VM
 that *does* — Firecracker needs only **one** level of nested virtualization, which
 modern Macs and Windows 11 both expose.
@@ -15,9 +15,9 @@ modern Macs and Windows 11 both expose.
 
 ```sh
 brew install lima                                  # once
-BORING_ANTHROPIC_KEY=sk-ant-... ./infra/local/setup-local.sh
+NEHEMIAH_ANTHROPIC_KEY=sk-ant-... ./infra/local/setup-local.sh
 # → builds the arm64 stack in a Lima VM, forwards :8080 to the Mac at :8088
-echo 'BORING_URL=http://localhost:8088' > apps/web/.env
+echo 'NEHEMIAH_URL=http://localhost:8088' > apps/web/.env
 npm run dev -w web                                 # → http://localhost:5173
 ```
 
@@ -89,11 +89,11 @@ arm64 artifacts exist (verified live):
   the egress firewall blocks RFC1918 destinations — and under Lima the guest's own
   gateway *is* RFC1918 (double NAT), so a microVM's traffic to the outside is
   dropped. The desktop's browser opens but pages don't load until the firewall is
-  relaxed for the Lima gateway (or `BORING_NET` egress rules are loosened for local
+  relaxed for the Lima gateway (or `NEHEMIAH_NET` egress rules are loosened for local
   mode). Doesn't affect snapshot-restore or the desktop UI.
-- **Rebuilding the desktop image in a *live* Lima VM is finicky** — boringd's
+- **Rebuilding the desktop image in a *live* Lima VM is finicky** — nehemiahd's
   warm-pool VM can hold `desktop.ext4` open. `setup-local.sh` builds it cleanly on
-  first run; to rebuild, `limactl stop boring` (or stop boringd) first.
+  first run; to rebuild, `limactl stop boring` (or stop nehemiahd) first.
 - Cold desktop boot is slow under nested virt (~45 s); the warm pool hides it.
 
 ---
@@ -144,7 +144,7 @@ The infra scripts assume *x86_64* and *SSH into a remote box*. To make
 - `build-template.sh`: confirm snapshot/restore on aarch64 (best-effort, cold-boot
   fallback already exists).
 
-**No change:** `boringd` itself — it's Go (`CGO_ENABLED=0`), builds native arm64 with
+**No change:** `nehemiahd` itself — it's Go (`CGO_ENABLED=0`), builds native arm64 with
 no source edits. The `/dev/kvm` checks (`bootstrap.sh`, `setup.sh`) are correct and
 stay.
 

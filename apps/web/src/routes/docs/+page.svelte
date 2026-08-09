@@ -4,7 +4,7 @@
 </script>
 
 <svelte:head>
-	<title>Docs · boring computers</title>
+	<title>Docs · Nehemiah</title>
 	<meta
 		name="description"
 		content="Boot a Firecracker microVM in milliseconds over a plain REST + WebSocket API."
@@ -21,7 +21,7 @@
 <div class="mx-auto max-w-2xl px-5 pt-24 pb-24">
 	<h1 class="text-[28px] font-semibold tracking-[-0.03em] text-ink">Docs</h1>
 	<p class="mt-3 leading-relaxed text-ink-muted">
-		A computer is one HTTP call away. <span class="text-ink">boringd</span> boots a Firecracker
+		A computer is one HTTP call away. <span class="text-ink">nehemiahd</span> boots a Firecracker
 		microVM — jailed, resource-capped, network-isolated — and hands you a serial console, a VNC
 		display, or an AI that drives it. Snapshot-restore means a shell is ready in
 		<span class="text-ink">~3&nbsp;ms</span>. Machines self-destruct when their TTL expires — or
@@ -30,9 +30,9 @@
 
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">Base URL</h2>
 	<p class="mt-2 text-[13px] leading-relaxed text-ink-muted">
-		Run your own <span class="text-ink">boringd</span> (see the
+		Run your own <span class="text-ink">nehemiahd</span> (see the
 		<a
-			href="https://github.com/michaelshimeles/boring-computers"
+			href="https://github.com/boringcomputers/nehemiah"
 			class="text-accent hover:underline">repo</a
 		>) and point everything at your deployment. It listens on this by default:
 	</p>
@@ -74,7 +74,7 @@ curl -s -X POST ${API}/v1/machines \\
 		transfer and previews (below) need a connected machine — a desktop, or a shell with
 		<code class="text-ink">net</code>. Pass <code class="text-ink">"persistent": true</code> for a
 		machine with no TTL (runs until you delete it) — honored only when the server sets
-		<code class="text-ink">BORING_ALLOW_PERSISTENT=1</code>, else it falls back to the TTL.
+		<code class="text-ink">NEHEMIAH_ALLOW_PERSISTENT=1</code>, else it falls back to the TTL.
 	</p>
 
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">WebSockets</h2>
@@ -96,7 +96,7 @@ curl -s -X POST ${API}/v1/machines \\
 
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">Previews</h2>
 	<p class="mt-2 text-[13px] leading-relaxed text-ink-muted">
-		Run a server inside a connected machine and open its port through boringd — works locally (over
+		Run a server inside a connected machine and open its port through nehemiahd — works locally (over
 		a tunnel) and on public deployments, no wildcard DNS:
 	</p>
 	<div class="mt-3">
@@ -106,7 +106,7 @@ curl -s -X POST ${API}/v1/machines \\
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">Inference</h2>
 	<p class="mt-2 text-[13px] leading-relaxed text-ink-muted">
 		An OpenAI-compatible gateway — Claude runs on Anthropic, everything else routes through
-		OpenRouter (set your own <code class="text-ink">BORING_OPENROUTER_KEY</code>).
+		OpenRouter (set your own <code class="text-ink">NEHEMIAH_OPENROUTER_KEY</code>).
 	</p>
 	<div class="mt-3 overflow-x-auto rounded-geist border border-line">
 		<table class="w-full border-collapse font-mono text-[12px]">
@@ -166,25 +166,25 @@ curl -s -X POST ${API}/v1/machines \\
 	</p>
 	<div class="mt-3">
 		{@render code(`import { Effect, Stream } from 'effect';
-import { make } from 'boring-computers-sdk';
+import { make } from 'nehemiah-sdk';
 
-const boring = make({ baseUrl: '${API}' });
+const nehemiah = make({ baseUrl: '${API}' });
 
 Effect.runPromise(
   Effect.gen(function* () {
-    const vm = yield* boring.createMachine({ template: 'python', ttlSeconds: 60 });
+    const vm = yield* nehemiah.createMachine({ template: 'python', ttlSeconds: 60 });
     console.log(vm.id, vm.mode, \`\${vm.boot_ms}ms\`);
 
     // the serial console is a Stream; the socket closes with the Scope
     yield* Effect.scoped(
       Effect.gen(function* () {
-        const tty = yield* boring.connectTty(vm.id);
+        const tty = yield* nehemiah.connectTty(vm.id);
         yield* tty.send('print("hello from a microVM")\\n');
         yield* tty.output.pipe(Stream.runForEach((b) => Effect.sync(() => process.stdout.write(b))));
       })
     );
 
-    yield* boring.destroyMachine(vm.id);
+    yield* nehemiah.destroyMachine(vm.id);
   })
 );`)}
 	</div>
@@ -210,7 +210,7 @@ Effect.runPromise(
 	<div class="mt-3">
 		{@render code(`{
   "mcpServers": {
-    "boring-computers": { "command": "node", "args": ["/path/to/packages/mcp/index.mjs"] }
+    "nehemiah": { "command": "node", "args": ["/path/to/packages/mcp/index.mjs"] }
   }
 }`)}
 	</div>
@@ -226,7 +226,7 @@ Effect.runPromise(
 		<a
 			href={resolve('/')}
 			class="font-mono text-[12px] text-ink-subtle transition-colors hover:text-ink"
-			>← back to boring computers</a
+			>← back to Nehemiah</a
 		>
 	</div>
 </div>

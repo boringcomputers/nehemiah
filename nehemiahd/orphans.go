@@ -11,11 +11,11 @@ import (
 )
 
 // reapOrphans cleans up firecracker VMs and artifacts left behind by a previous
-// boringd that exited uncleanly (crash, OOM, SIGKILL). boringd is the only thing
+// nehemiahd that exited uncleanly (crash, OOM, SIGKILL). nehemiahd is the only thing
 // on the host that runs firecracker, and its machine map starts empty, so at
 // startup anything present is an orphan: kill the processes and remove the stale
 // jailer chroots, sockets and overlays. This keeps restarts clean instead of
-// leaking a VM + its disk each time (boringd can't re-adopt in-memory state, so
+// leaking a VM + its disk each time (nehemiahd can't re-adopt in-memory state, so
 // those machines are already unreachable).
 //
 // Runs once, before the server starts. Safe because nothing is tracked yet.

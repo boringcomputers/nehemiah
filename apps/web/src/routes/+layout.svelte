@@ -13,7 +13,7 @@
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
-	<meta property="og:site_name" content="Boring Computers" />
+	<meta property="og:site_name" content="Nehemiah" />
 	<meta property="og:type" content="website" />
 	<meta property="og:title" content="Computers that are refreshingly boring." />
 	<meta property="og:description" content={OG_DESC} />
@@ -36,10 +36,10 @@
 	<div class="flex items-center gap-5">
 		<a href={resolve('/docs')} class="text-ink-subtle transition-colors hover:text-ink">Docs</a>
 		<a
-			href="https://github.com/michaelshimeles/boring-computers"
+			href="https://github.com/boringcomputers/nehemiah"
 			target="_blank"
 			rel="noopener"
-			aria-label="boring computers on GitHub"
+			aria-label="Nehemiah on GitHub"
 			class="text-ink-subtle transition-colors hover:text-ink"
 		>
 			<svg

@@ -1,7 +1,7 @@
-# boring-computers-sdk
+# nehemiah-sdk
 
-An [Effect](https://effect.website)-native TypeScript client for the **boring
-computers** Firecracker microVM API (`boringd`). REST calls go through
+An [Effect](https://effect.website)-native TypeScript client for the **Nehemiah**
+Firecracker microVM API (`nehemiahd`). REST calls go through
 `@effect/platform`'s `HttpClient` and validate responses with `Schema`; every
 call is an `Effect` with typed errors; the serial console is a `Stream` with
 `Scope`-based teardown.
@@ -9,32 +9,32 @@ call is an `Effect` with typed errors; the serial console is a `Stream` with
 ## Install
 
 ```sh
-npm install boring-computers-sdk
+npm install nehemiah-sdk
 ```
 
 (Or from the monorepo: `npm install` at the root, then
-`npm run build -w boring-computers-sdk` → `dist/`.)
+`npm run build -w nehemiah-sdk` → `dist/`.)
 
 ## Usage
 
 ```ts
 import { Effect, Stream } from 'effect';
-import { make } from 'boring-computers-sdk';
+import { make } from 'nehemiah-sdk';
 
-const boring = make({ baseUrl: 'http://localhost:8080' });
+const nehemiah = make({ baseUrl: 'http://localhost:8080' });
 
 const program = Effect.gen(function* () {
-	const vm = yield* boring.createMachine({ template: 'python', ttlSeconds: 300 });
+	const vm = yield* nehemiah.createMachine({ template: 'python', ttlSeconds: 300 });
 
 	// Typed errors — no throws. Catch by tag:
-	const found = yield* boring
+	const found = yield* nehemiah
 		.getMachine(vm.id)
 		.pipe(Effect.catchTag('ResponseError', (e) => Effect.succeed(`http ${e.status}`)));
 
 	// The serial console is a Stream; the socket closes with the Scope.
 	yield* Effect.scoped(
 		Effect.gen(function* () {
-			const tty = yield* boring.connectTty(vm.id);
+			const tty = yield* nehemiah.connectTty(vm.id);
 			yield* tty.send("python3 -c 'print(2 + 2)'\n");
 			yield* tty.output.pipe(
 				Stream.runForEach((bytes) => Effect.sync(() => process.stdout.write(bytes)))
@@ -42,32 +42,32 @@ const program = Effect.gen(function* () {
 		})
 	);
 
-	yield* boring.destroyMachine(vm.id);
+	yield* nehemiah.destroyMachine(vm.id);
 });
 
 Effect.runPromise(program);
 ```
 
-Prefer dependency injection? Use `layer({ baseUrl })` and the `BoringClient` tag
-(`yield* BoringClient`).
+Prefer dependency injection? Use `layer({ baseUrl })` and the `NehemiahClient` tag
+(`yield* NehemiahClient`).
 
 ### API
 
-- `make({ baseUrl?, token? }): BoringClient` — build a client
-- `layer({ baseUrl?, token? })` + `BoringClient` tag — the same, as a `Layer`
-- `createMachine(opts?: { template?, ttlSeconds?, net? }): Effect<Machine, BoringError>`
+- `make({ baseUrl?, token? }): NehemiahClient` — build a client
+- `layer({ baseUrl?, token? })` + `NehemiahClient` tag — the same, as a `Layer`
+- `createMachine(opts?: { template?, ttlSeconds?, net? }): Effect<Machine, NehemiahError>`
   — retries transient failures internally
-- `exec(id, command, { timeoutSeconds? }): Effect<ExecResult, BoringError>` —
+- `exec(id, command, { timeoutSeconds? }): Effect<ExecResult, NehemiahError>` —
   run one command, get `{ output, exit_code, timed_out, duration_ms }`
-- `extendMachine(id, ttlSeconds?): Effect<Machine, BoringError>` — reset the TTL
-- `branchMachines(id, count): Effect<Machine[], BoringError>` — fleet fork: N
+- `extendMachine(id, ttlSeconds?): Effect<Machine, NehemiahError>` — reset the TTL
+- `branchMachines(id, count): Effect<Machine[], NehemiahError>` — fleet fork: N
   live clones from one snapshot (each carries `parent`)
-- `publishMachine(id, name): Effect<Template, BoringError>` — freeze a machine
+- `publishMachine(id, name): Effect<Template, NehemiahError>` — freeze a machine
   as a named template; boot it later with `createMachine({ template: name })`
-- `listTemplates: Effect<Template[], BoringError>` / `deleteTemplate(name)`
-- `listMachines: Effect<Machine[], BoringError>`
-- `getMachine(id) / branchMachine(id): Effect<Machine, BoringError>`
-- `destroyMachine(id): Effect<void, BoringError>`
+- `listTemplates: Effect<Template[], NehemiahError>` / `deleteTemplate(name)`
+- `listMachines: Effect<Machine[], NehemiahError>`
+- `getMachine(id) / branchMachine(id): Effect<Machine, NehemiahError>`
+- `destroyMachine(id): Effect<void, NehemiahError>`
 - `connectTty(id): Effect<TtyChannel, RequestError, Scope>` — `{ output: Stream, send }`
 
 Errors are tagged: `RequestError` (transport) and `ResponseError` (`{ status, body }`).
@@ -78,5 +78,5 @@ Errors are tagged: `RequestError` (transport) and `ResponseError` (`{ status, bo
 Build first, then:
 
 ```sh
-BORING_URL=http://localhost:8080 node demo.mjs   # Ctrl-] to quit
+NEHEMIAH_URL=http://localhost:8080 node demo.mjs   # Ctrl-] to quit
 ```

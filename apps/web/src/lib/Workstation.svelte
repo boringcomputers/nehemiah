@@ -275,7 +275,7 @@
 			fontSize: 12,
 			theme: { background: '#0a0a0a', foreground: '#ededed', cursor: '#ededed', green: '#00ca50' },
 			bannerText:
-				'\x1b[38;5;244mboring computers · desktop shell · node · claude · codex · cursor · pi\r\n' +
+				'\x1b[38;5;244mNehemiah · desktop shell · node · claude · codex · cursor · pi\r\n' +
 				'run a server (e.g. python3 -m http.server 8000) then use "preview ↗" up top to open it\x1b[0m\r\n'
 		});
 	}

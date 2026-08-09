@@ -11,16 +11,16 @@ The preview proxy exposes a port running inside a guest Firecracker VM at a publ
 2. **Subdomain-based** (`<id>--<port>.<PreviewBase>`) — requires Caddy on-demand TLS + wildcard DNS
 
 ## Prerequisites
-- boringd must be running with `BORING_NET=1` (enables guest networking via tap/bridge/DHCP)
+- nehemiahd must be running with `NEHEMIAH_NET=1` (enables guest networking via tap/bridge/DHCP)
 - A test VM must be created with `net: true` (ensures DHCP lease is assigned)
 - An HTTP server must be running inside the guest on a known port
 
 ## How to Set Up a Test VM
 
 ```bash
-# Build and run boringd (with auth to test the auth bypass)
-cd boringd && go build -o /tmp/boringd .
-sudo BORING_NET=1 BORING_JAILER=0 BORING_TOKEN=test-token /tmp/boringd &
+# Build and run nehemiahd (with auth to test the auth bypass)
+cd nehemiahd && go build -o /tmp/nehemiahd .
+sudo NEHEMIAH_NET=1 NEHEMIAH_JAILER=0 NEHEMIAH_TOKEN=test-token /tmp/nehemiahd &
 
 # Create a VM with networking
 curl -s http://localhost:8080/v1/machines -X POST \
@@ -56,10 +56,10 @@ root filesystem — that makes the sub-path test below resolve.
 - Guest MAC is derived from machine ID via SHA1: `guestMAC(id) → 06:00:XX:XX:XX:XX`
 
 ## Common Failure Modes
-- **"this computer isn't on the network"**: BORING_NET not set, or machine created without net=true (for snapshot-eligible templates)
+- **"this computer isn't on the network"**: NEHEMIAH_NET not set, or machine created without net=true (for snapshot-eligible templates)
 - **"nothing is listening on port X"**: Server not started in guest, or bound to 127.0.0.1 instead of 0.0.0.0
 - **401 on preview URL**: The route might have been accidentally wrapped in `s.auth()` again
 - **Machine TTL expired**: Default TTL is short; use 900s for testing
 
 ## Devin Secrets Needed
-- None required for local testing (BORING_TOKEN is set at runtime for test isolation)
+- None required for local testing (NEHEMIAH_TOKEN is set at runtime for test isolation)

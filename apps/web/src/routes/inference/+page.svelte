@@ -107,7 +107,7 @@
 </script>
 
 <svelte:head>
-	<title>Inference · boring computers</title>
+	<title>Inference · Nehemiah</title>
 	<meta name="description" content="One OpenAI-compatible endpoint for every model." />
 </svelte:head>
 
@@ -188,6 +188,6 @@
 	</div>
 
 	<a href={home} class="mt-6 font-mono text-[12px] text-ink-subtle transition-colors hover:text-ink"
-		>← back to boring computers</a
+		>← back to Nehemiah</a
 	>
 </div>

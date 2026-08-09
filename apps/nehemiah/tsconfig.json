@@ -2,15 +2,15 @@
 	"extends": "@nehemiah/typescript-config/base.json",
 	"compilerOptions": {
 		"module": "NodeNext",
-		"moduleResolution": "nodenext",
-		"target": "ESNext",
-		"lib": ["ESNext"],
+		"moduleResolution": "NodeNext",
+		"target": "ES2023",
+		"lib": ["ES2023", "DOM", "DOM.Iterable"],
 		"types": ["node"],
 		"declaration": true,
 		"sourceMap": true,
 		"outDir": "dist",
-		"rootDir": "src"
+		"rootDir": "."
 	},
-	"include": ["src"],
-	"exclude": ["dist", "node_modules", "src/**/*.test.ts"]
+	"include": ["src", "test"],
+	"exclude": ["dist", "node_modules"]
 }

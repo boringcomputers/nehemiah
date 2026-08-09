@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Interactive demo for boring-computers-sdk (Effect).
+// Interactive demo for nehemiah-sdk (Effect).
 //
-//   BORING_URL=http://localhost:8080 node demo.mjs
+//   NEHEMIAH_URL=http://localhost:8080 node demo.mjs
 //
 // Boots a `python` microVM (destroyed automatically on exit via acquireRelease)
 // and drops you into its live serial shell. Press Ctrl-] to quit.
@@ -9,22 +9,22 @@
 import { Console, Effect, Stream } from 'effect';
 import { make } from './dist/index.js';
 
-const boring = make({
-	baseUrl: process.env.BORING_URL ?? 'http://localhost:8080',
-	token: process.env.BORING_TOKEN || undefined
+const nehemiah = make({
+	baseUrl: process.env.NEHEMIAH_URL ?? process.env.BORING_URL ?? 'http://localhost:8080',
+	token: process.env.NEHEMIAH_TOKEN || process.env.BORING_TOKEN || undefined
 });
 
 const program = Effect.gen(function* () {
 	// The machine is torn down when this scope closes, whatever the exit path.
 	const machine = yield* Effect.acquireRelease(
-		boring.createMachine({ template: 'python', ttlSeconds: 300 }),
-		(m) => boring.destroyMachine(m.id).pipe(Effect.ignore)
+		nehemiah.createMachine({ template: 'python', ttlSeconds: 300 }),
+		(m) => nehemiah.destroyMachine(m.id).pipe(Effect.ignore)
 	);
 	yield* Console.log(
-		`[boring] ${machine.id} ready (mode=${machine.mode}, boot_ms=${machine.boot_ms}) — Ctrl-] to quit\n`
+		`[nehemiah] ${machine.id} ready (mode=${machine.mode}, boot_ms=${machine.boot_ms}) — Ctrl-] to quit\n`
 	);
 
-	const tty = yield* boring.connectTty(machine.id);
+	const tty = yield* nehemiah.connectTty(machine.id);
 
 	// Stream the guest's serial output to our stdout, in the background.
 	yield* tty.output.pipe(
@@ -45,5 +45,5 @@ const program = Effect.gen(function* () {
 });
 
 Effect.runPromise(Effect.scoped(program))
-	.catch((e) => console.error('[boring] error:', e?.message ?? e))
+	.catch((e) => console.error('[nehemiah] error:', e?.message ?? e))
 	.finally(() => process.exit(0));

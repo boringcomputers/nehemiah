@@ -4,11 +4,11 @@
 	import Chassis from '$lib/Chassis.svelte';
 	import Launcher from '$lib/Launcher.svelte';
 
-	// Local dev (`npm run dev` against your own boringd) gets the full interactive
+	// Local dev (`npm run dev` against your own nehemiahd) gets the full interactive
 	// console; the public production build is a static open-source showcase.
 	const interactive = import.meta.env.DEV;
 
-	const GITHUB = 'https://github.com/michaelshimeles/boring-computers';
+	const GITHUB = 'https://github.com/boringcomputers/nehemiah';
 
 	const PRODUCTS = [
 		{
@@ -57,7 +57,7 @@
 </script>
 
 <svelte:head>
-	<title>Boring Computers</title>
+	<title>Nehemiah</title>
 	<meta
 		name="description"
 		content="Open-source instant microVMs with a terminal, a browser, coding agents, and an AI that drives them. Run your own."
@@ -183,7 +183,7 @@
 				class="flex flex-col gap-6 border-t border-line pt-10 sm:flex-row sm:items-center sm:justify-between"
 			>
 				<div>
-					<div class="font-semibold text-ink">boring computers</div>
+					<div class="font-semibold text-ink">Nehemiah</div>
 					<div class="mt-1 font-mono text-[12px] text-ink-faint">
 						Computers that are refreshingly boring.
 					</div>

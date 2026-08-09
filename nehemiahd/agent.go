@@ -52,7 +52,7 @@ func (mgr *Manager) screenshotPNG(id string) ([]byte, error) {
 	return png, nil
 }
 
-// handleAgent runs the computer-use loop (wired once BORING_ANTHROPIC_KEY is set).
+// handleAgent runs the computer-use loop (wired once NEHEMIAH_ANTHROPIC_KEY is set).
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	s.runAgent(w, r)
 }

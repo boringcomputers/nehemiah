@@ -5,14 +5,21 @@ import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-vercel';
 import { sveltekit } from '@sveltejs/kit/vite';
 
-// boringd control plane. Reads BORING_URL / BORING_TOKEN from apps/web/.env (or
-// the shell). Point BORING_URL at your own boringd — directly, or at a local
-// port forwarded to a private box over an SSH tunnel. If that boringd needs a
-// token, set BORING_TOKEN and it's injected here server-side (never the browser).
+// nehemiahd host daemon. Reads NEHEMIAH_URL / NEHEMIAH_TOKEN from apps/web/.env
+// (or the shell); the pre-rename BORING_URL / BORING_TOKEN still work. Point it
+// at your own nehemiahd — directly, or at a local port forwarded to a private box
+// over an SSH tunnel. If that nehemiahd needs a token, set NEHEMIAH_TOKEN and it is
+// injected here server-side (never the browser).
 export default defineConfig(({ mode }) => {
 	const env = loadEnv(mode, process.cwd(), '');
-	const BORING_URL = env.BORING_URL || process.env.BORING_URL || 'http://localhost:8080';
-	const BORING_TOKEN = env.BORING_TOKEN || process.env.BORING_TOKEN || '';
+	const pick = (name: string): string =>
+		env[`NEHEMIAH_${name}`] ||
+		process.env[`NEHEMIAH_${name}`] ||
+		env[`BORING_${name}`] ||
+		process.env[`BORING_${name}`] ||
+		'';
+	const NEHEMIAH_URL = pick('URL') || 'http://localhost:8080';
+	const NEHEMIAH_TOKEN = pick('TOKEN');
 
 	return {
 		plugins: [
@@ -28,16 +35,16 @@ export default defineConfig(({ mode }) => {
 		],
 		server: {
 			proxy: {
-				// Browser -> /boring/* -> boringd (token injected here, HTTP + WS).
+				// Browser -> /boring/* -> nehemiahd (token injected here, HTTP + WS).
 				'/boring': {
-					target: BORING_URL,
+					target: NEHEMIAH_URL,
 					changeOrigin: true,
 					ws: true,
 					rewrite: (p: string) => p.replace(/^\/boring/, ''),
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					configure: (proxy: any) => {
-						if (!BORING_TOKEN) return;
-						const auth = `Bearer ${BORING_TOKEN}`;
+						if (!NEHEMIAH_TOKEN) return;
+						const auth = `Bearer ${NEHEMIAH_TOKEN}`;
 						proxy.on('proxyReq', (r: { setHeader: (k: string, v: string) => void }) =>
 							r.setHeader('authorization', auth)
 						);

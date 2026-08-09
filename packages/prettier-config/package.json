@@ -1,5 +1,5 @@
 {
-	"name": "@boring/prettier-config",
+	"name": "@nehemiah/prettier-config",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",

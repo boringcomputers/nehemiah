@@ -1,6 +1,6 @@
-# Lima VM for running boringd locally on Apple Silicon (M3+ / macOS 15+).
+# Lima VM for running nehemiahd locally on Apple Silicon (M3+ / macOS 15+).
 # vz + nestedVirtualization is what surfaces /dev/kvm inside the Linux guest so
-# Firecracker can boot microVMs. arm64 guest → needs the aarch64 boringd + images.
+# Firecracker can boot microVMs. arm64 guest → needs the aarch64 nehemiahd + images.
 vmType: vz
 rosetta:
   enabled: false
@@ -12,7 +12,7 @@ images:
   - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
     arch: aarch64
 mounts: []
-# boringd binds 0.0.0.0:8080 in the guest; forward it to the Mac's localhost so
+# nehemiahd binds 0.0.0.0:8080 in the guest; forward it to the Mac's localhost so
 # the site (npm run dev) can reach it at http://localhost:8080.
 portForwards:
   - guestPort: 8080

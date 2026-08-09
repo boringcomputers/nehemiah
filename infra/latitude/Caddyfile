@@ -1,10 +1,10 @@
-# Public TLS reverse proxy for boringd. api.boringcomputers.com is canonical;
-# the sslip.io host is kept as a fallback. boringd binds 127.0.0.1:8080
-# (BORING_ADDR) so it is only reachable through this proxy.
+# Public TLS reverse proxy for nehemiahd. api.boringcomputers.com is canonical;
+# the sslip.io host is kept as a fallback. nehemiahd binds 127.0.0.1:8080
+# (NEHEMIAH_ADDR) so it is only reachable through this proxy.
 #
 # Preview subdomains (<id>--<port>.162-43-188-89.sslip.io) use on-demand TLS
-# gated by boringd's /internal/tls-check, so certs are only minted for real
-# machines. boringd reverse-proxies them to the guest's port.
+# gated by nehemiahd's /internal/tls-check, so certs are only minted for real
+# machines. nehemiahd reverse-proxies them to the guest's port.
 
 {
 	on_demand_tls {

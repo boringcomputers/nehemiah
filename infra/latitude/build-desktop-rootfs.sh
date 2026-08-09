@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# build-desktop-rootfs.sh - Build the "desktop" ext4 rootfs for boring computers.
+# build-desktop-rootfs.sh - Build the "desktop" ext4 rootfs for Nehemiah.
 #
 # A minimal Debian rootfs that boots straight into a headless X session
 # (Xvfb + openbox + xterm + xclock) served over VNC, and bridges the VNC port
-# out over vsock so the host (boringd) can reach it without any guest networking:
+# out over vsock so the host (nehemiahd) can reach it without any guest networking:
 #
-#     browser ⟶ boringd /vnc WS ⟶ vsock:5900 ⟶ socat ⟶ x11vnc(127.0.0.1:5900) ⟶ Xvfb :0
+#     browser ⟶ nehemiahd /vnc WS ⟶ vsock:5900 ⟶ socat ⟶ x11vnc(127.0.0.1:5900) ⟶ Xvfb :0
 #
 # Produces /opt/boring/rootfs/desktop.ext4. Run as root on the box.
 #
 set -euo pipefail
 
-BORING_ROOT="/opt/boring"
-ROOTFS_DIR="${BORING_ROOT}/rootfs"
+NEHEMIAH_ROOT="/opt/boring"
+ROOTFS_DIR="${NEHEMIAH_ROOT}/rootfs"
 IMG="${ROOTFS_DIR}/desktop.ext4"
 IMG_SIZE_MB="${IMG_SIZE_MB:-6144}"   # room for chromium + node + coding agents
 SUITE="${SUITE:-bookworm}"
@@ -127,7 +127,7 @@ CHROMIUM_BIN=/usr/lib/chromium/chromium; [ -x "$CHROMIUM_BIN" ] || CHROMIUM_BIN=
   --disable-features=Translate --password-store=basic --user-data-dir=/root/.chromium \
   --window-size=900,600 --window-position=16,20 https://duckduckgo.com >/var/log/chromium.log 2>&1 &
 xterm -fa "DejaVu Sans Mono" -fs 10 -geometry 108x13+16+648 -bg "#0e0e0e" -fg "#ededed" \
-  -title "boring computers" -e /bin/sh -c 'echo "boring computers . desktop microVM"; echo "coding agents ready:  claude   codex   cursor-agent   pi   (bring your own key)"; echo; exec /bin/sh' >/dev/null 2>&1 &
+  -title "Nehemiah" -e /bin/sh -c 'echo "Nehemiah . desktop microVM"; echo "coding agents ready:  claude   codex   cursor-agent   pi   (bring your own key)"; echo; exec /bin/sh' >/dev/null 2>&1 &
 xcalc -geometry 300x400+956+20 >/var/log/xcalc.log 2>&1 &
 # -threads: serve input + framebuffer concurrently (responsive input). -defer 10:
 # send updates ~10ms after a change (low latency). Keep -noxdamage — Xvfb's DAMAGE
@@ -137,7 +137,7 @@ x11vnc -display :0 -forever -shared -nopw -rfbport 5900 -noxdamage -threads -def
 # Bridge guest vsock port 5900 -> local VNC. The host connects via the vsock UDS.
 socat VSOCK-LISTEN:5900,fork,reuseaddr TCP:127.0.0.1:5900 >/var/log/socat.log 2>&1 &
 
-echo BORING_READY > /dev/ttyS0
+echo NEHEMIAH_READY > /dev/ttyS0
 exec /bin/sh
 INIT_EOF
 chmod +x "${MNT}/sbin/boring-init"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# tunnel.sh — forward local :8080 to the Latitude box's boringd :8080 over SSH.
+# tunnel.sh — forward local :8080 to the Latitude box's nehemiahd :8080 over SSH.
 #
-# boringd is intentionally NOT exposed to the public internet (it runs untrusted
+# nehemiahd is intentionally NOT exposed to the public internet (it runs untrusted
 # code). This tunnel is how you reach it from your laptop to run the demo.
 #
 # Config from ~/.config/latitude/server.env:
@@ -21,7 +21,7 @@ usage() {
   cat <<'EOF'
 Usage: infra/latitude/tunnel.sh [LOCAL_PORT]
 
-Opens an SSH tunnel: localhost:<LOCAL_PORT> -> box:8080 (boringd).
+Opens an SSH tunnel: localhost:<LOCAL_PORT> -> box:8080 (nehemiahd).
 LOCAL_PORT defaults to 8080.
 
 Requires ~/.config/latitude/server.env with SERVER_IP and SSH_KEY.
@@ -51,17 +51,17 @@ if [[ ! -f "${SSH_KEY}" ]]; then
 fi
 
 cat <<EOF
-==> Tunnel: http://localhost:${LOCAL_PORT}  ->  ${SERVER_IP}:8080 (boringd)
+==> Tunnel: http://localhost:${LOCAL_PORT}  ->  ${SERVER_IP}:8080 (nehemiahd)
 
     Leave this running. In another terminal, run the demo:
 
       # from repo root
-      BORING_URL=http://localhost:${LOCAL_PORT} node packages/sdk/demo.mjs
+      NEHEMIAH_URL=http://localhost:${LOCAL_PORT} node packages/sdk/demo.mjs
 
     Quick check:
       curl http://localhost:${LOCAL_PORT}/healthz
 
-    (If boringd requires a token, export BORING_TOKEN too.)
+    (If nehemiahd requires a token, export NEHEMIAH_TOKEN too.)
 
     Press Ctrl-C to close the tunnel.
 EOF

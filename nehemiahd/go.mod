@@ -1,4 +1,4 @@
-module github.com/boring-computers/boringd
+module github.com/boringcomputers/nehemiah/nehemiahd
 
 go 1.25.0
 
