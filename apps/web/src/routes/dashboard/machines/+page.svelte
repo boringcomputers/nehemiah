@@ -67,6 +67,7 @@
 	let connectionGeneration = 0;
 	let refreshInFlight = $state(false);
 	let refreshGeneration = 0;
+	let previewGeneration = 0;
 
 	const selectedMachine = $derived(machines.find((machine) => machine.id === selectedMachineId));
 	const isTerminal = (machine: Machine) => ['stopped', 'failed', 'lost'].includes(machine.state);
@@ -145,6 +146,7 @@
 
 	async function changeProject(id: string) {
 		disconnectConnection();
+		previewGeneration += 1;
 		projectId = id;
 		machines = [];
 		selectedMachineId = '';
@@ -360,15 +362,16 @@
 		const popup = window.open('about:blank', '_blank');
 		if (popup) popup.opener = null;
 		setBusy(id, 'Opening preview…');
-		// connectionGeneration is bumped on every project switch (via
-		// disconnectConnection), so this invalidates a pending preview even across an
-		// A -> B -> A round-trip. Capture the port too, so a later port change cannot
-		// invalidate a session that was validly issued for the original port.
-		const generation = connectionGeneration;
+		// previewGeneration is bumped only on project switch (separate from
+		// terminal/desktop connection teardown), so a pending preview is invalidated
+		// across an A -> B -> A round-trip but not by starting a TTY/VNC session.
+		// Capture the port too, so a later port change cannot invalidate a session
+		// that was validly issued for the original port.
+		const generation = previewGeneration;
 		const requestedPort = previewPort;
 		try {
 			const session = await issueSession(id, 'preview');
-			if (generation !== connectionGeneration) {
+			if (generation !== previewGeneration) {
 				popup?.close();
 				return;
 			}
