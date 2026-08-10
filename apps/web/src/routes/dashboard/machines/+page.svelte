@@ -68,6 +68,12 @@
 	let refreshInFlight = $state(false);
 	let refreshGeneration = 0;
 	let previewGeneration = 0;
+	// Any machine-selection change invalidates a pending preview, including an
+	// A -> B -> A round-trip that a plain id comparison cannot detect.
+	$effect(() => {
+		void selectedMachineId;
+		previewGeneration += 1;
+	});
 
 	const selectedMachine = $derived(machines.find((machine) => machine.id === selectedMachineId));
 	const isTerminal = (machine: Machine) => ['stopped', 'failed', 'lost'].includes(machine.state);
@@ -371,10 +377,10 @@
 		const requestedPort = previewPort;
 		try {
 			const session = await issueSession(id, 'preview');
-			// Abandon the preview if the user switched projects (previewGeneration) or
-			// selected a different machine. Connecting a TTY/VNC session leaves the
-			// selection unchanged, so a valid pending preview is not cancelled.
-			if (generation !== previewGeneration || id !== selectedMachineId) {
+			// previewGeneration is bumped on project switch, any machine-selection
+			// change, and page teardown — but not by connecting a TTY/VNC session — so
+			// this abandons a stale preview without cancelling a still-valid one.
+			if (generation !== previewGeneration) {
 				popup?.close();
 				return;
 			}
