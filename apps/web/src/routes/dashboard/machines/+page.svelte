@@ -360,19 +360,22 @@
 		const popup = window.open('about:blank', '_blank');
 		if (popup) popup.opener = null;
 		setBusy(id, 'Opening preview…');
-		const requestedProjectId = projectId;
+		// connectionGeneration is bumped on every project switch (via
+		// disconnectConnection), so this invalidates a pending preview even across an
+		// A -> B -> A round-trip. Capture the port too, so a later port change cannot
+		// invalidate a session that was validly issued for the original port.
+		const generation = connectionGeneration;
+		const requestedPort = previewPort;
 		try {
 			const session = await issueSession(id, 'preview');
-			// Abandon a preview the user has navigated away from (e.g. project switch)
-			// rather than publishing its URL or redirecting the popup.
-			if (requestedProjectId !== projectId) {
+			if (generation !== connectionGeneration) {
 				popup?.close();
 				return;
 			}
-			previewLink = machinePreviewUrl(session, id, previewPort);
+			previewLink = machinePreviewUrl(session, id, requestedPort);
 			if (popup) {
 				popup.location.replace(previewLink);
-				actionNotice = `Preview opened on port ${previewPort}. The session expires in ${session.expires_in} seconds.`;
+				actionNotice = `Preview opened on port ${requestedPort}. The session expires in ${session.expires_in} seconds.`;
 			} else {
 				actionNotice = 'Your browser blocked the new tab. Use the preview link below.';
 			}
