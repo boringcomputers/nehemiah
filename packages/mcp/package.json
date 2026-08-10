@@ -1,6 +1,6 @@
 {
   "name": "nehemiah-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.0",
   "description": "Model Context Protocol server for Nehemiah — let any AI spin up and drive a real computer.",
   "license": "Apache-2.0",
   "repository": {
@@ -24,14 +24,22 @@
   },
   "files": [
     "index.mjs",
+    "catalog.mjs",
+    "config.mjs",
+    "operation.mjs",
+    "websocket.mjs",
     "README.md"
   ],
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check index.mjs && node --check catalog.mjs && node --check config.mjs && node --check websocket.mjs"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "nehemiah-sdk": "^0.1.0",
+    "nehemiah-sdk": "^0.2.0-beta.0",
     "effect": "^3.12.0"
   }
 }

@@ -44,3 +44,4 @@ packages/sdk/dist/
 # Python bytecode
 __pycache__/
 *.pyc
+packages/cli/dist

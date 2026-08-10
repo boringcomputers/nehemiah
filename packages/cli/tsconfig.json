@@ -1,0 +1,16 @@
+{
+	"extends": "@nehemiah/typescript-config/base.json",
+	"compilerOptions": {
+		"module": "NodeNext",
+		"moduleResolution": "nodenext",
+		"target": "ES2022",
+		"lib": ["ES2022"],
+		"types": ["node"],
+		"declaration": true,
+		"sourceMap": true,
+		"outDir": "dist",
+		"rootDir": "src"
+	},
+	"include": ["src"],
+	"exclude": ["dist", "node_modules", "test"]
+}
