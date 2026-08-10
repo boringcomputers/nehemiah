@@ -2,19 +2,25 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/gorilla/websocket"
 )
 
-// The terminal agent drives a shell to accomplish a natural-language goal. It
-// types real commands into the guest's serial console (so a user watching the
-// terminal sees the AI work) and reads their output back by watching for the
-// shell prompt. Narration streams to the browser over the same JSON protocol as
-// the computer-use agent (say / action / done / error).
+// The local/self-hosted terminal agent drives a shell toward a natural-language
+// goal over serial. Managed cloud issues no agent capability or provider model
+// credential. Narration uses the computer-use agent's JSON protocol.
 
 const shellAgentSystem = `You build and run things in a Linux computer to accomplish the user's goal. This is a LIVE demo on a public website — a real person is watching the terminal as you type.
 
@@ -30,6 +36,16 @@ You have a limited number of steps — be efficient. When done, reply with one s
 
 const agentPrompt = "@> " // unique PS1 so output capture works on any shell
 
+const (
+	shellAgentStartTimeout  = 5 * time.Second
+	shellAgentLifetime      = 5 * time.Minute
+	shellAgentGoalLimit     = 4096
+	shellAgentCommandLimit  = 16 << 10
+	shellAgentOutputLimit   = 64 << 10
+	shellAgentContextOutput = 6000
+	shellAgentStepLimit     = 30
+)
+
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\r`)
 var promptRe = regexp.MustCompile(regexp.QuoteMeta(agentPrompt))
 var portRe = regexp.MustCompile(`PORT=(\d{2,5})`)
@@ -41,44 +57,71 @@ func (s *Server) runShellAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 		return
 	}
+	if s.cfg.NehemiahMode && r.URL.Query().Has("goal") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "goal_query_not_allowed"})
+		return
+	}
 	id := r.PathValue("id")
-	goal := strings.TrimSpace(r.URL.Query().Get("goal"))
-	if goal == "" {
-		goal = "Print a friendly greeting and today's date."
-	}
-	if len(goal) > 400 {
-		goal = goal[:400]
-	}
+	goal := ""
+	var guard *agentGuard
+	var runCommand func(context.Context, string) (string, bool)
 
-	console, consoleLock, ok := s.mgr.ConsoleLock(id)
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
-		return
-	}
-	// Exclusive console access for the whole run — a concurrent /exec would
-	// garble the serial line (and vice versa).
-	if !consoleLock.TryLock() {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "machine console is busy (an exec or another agent is running)"})
-		return
-	}
-	defer consoleLock.Unlock()
+	if s.cfg.NehemiahMode {
+		var ok bool
+		guard, goal, ok = s.setupShellAgentGuard(w, r)
+		if !ok {
+			return
+		}
+		defer guard.close()
+		client, err := s.managedShellGuestAgent(r)
+		if err != nil {
+			guard.send("error", "the guest command channel is unavailable")
+			return
+		}
+		runCommand = func(ctx context.Context, command string) (string, bool) {
+			return runManagedShellCommand(ctx, client, id, command)
+		}
+	} else {
+		console, consoleLock, ok := s.mgr.ConsoleLock(id)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+			return
+		}
+		if !consoleLock.TryLock() {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "machine console is busy (an exec or another agent is running)"})
+			return
+		}
+		defer consoleLock.Unlock()
 
-	guard := s.setupAgentGuard(w, r)
-	if guard == nil {
-		return
-	}
-	defer guard.close()
+		goal = strings.TrimSpace(r.URL.Query().Get("goal"))
+		if goal != "" {
+			if len(goal) > 400 {
+				goal = goal[:400]
+			}
+			guard = s.setupAgentGuard(w, r)
+			if guard == nil {
+				return
+			}
+		} else {
+			var frameOK bool
+			guard, goal, frameOK = s.setupShellAgentGuard(w, r)
+			if !frameOK {
+				return
+			}
+		}
+		defer guard.close()
 
-	_, sub := console.Subscribe()
-	defer console.Unsubscribe(sub)
-
-	// Set a unique prompt so output capture works on any shell (desktop dash
-	// prints "# ", Alpine prints "boring:~#").
-	if _, err := console.Write([]byte("PS1='" + agentPrompt + "'\n")); err != nil {
-		guard.send("error", "the terminal is no longer available")
-		return
+		_, sub := console.Subscribe()
+		defer console.Unsubscribe(sub)
+		if _, err := console.Write([]byte("PS1='" + agentPrompt + "'\n")); err != nil {
+			guard.send("error", "the terminal is no longer available")
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+		runCommand = func(_ context.Context, command string) (string, bool) {
+			return runGuestCommand(console, sub, command, 30*time.Second), false
+		}
 	}
-	time.Sleep(300 * time.Millisecond)
 
 	tool := map[string]any{
 		"name":        "run_command",
@@ -92,14 +135,21 @@ func (s *Server) runShellAgent(w http.ResponseWriter, r *http.Request) {
 	messages := []json.RawMessage{userTextMessage("Your task: " + goal)}
 
 	guard.send("say", "On it — let me get to work in the terminal.")
-	for step := 0; step < s.cfg.AgentMaxSteps; step++ {
+	steps := s.cfg.AgentMaxSteps
+	if steps > shellAgentStepLimit {
+		steps = shellAgentStepLimit
+	}
+	for step := 0; step < steps; step++ {
 		if guard.stopped() {
 			return
 		}
-		// Keep the machine alive while we're working on it — a run must not die
-		// to the TTL reaper mid-command.
-		s.mgr.ExtendIfExpiring(id, 2*time.Minute)
-		resp, err := callAnthropicAPI(s.cfg, anthropicRequest{
+		// Local demos preserve their historical convenience extension. Managed
+		// expiry is an absolute control-plane lease and cannot be extended by a
+		// host-local model loop.
+		if !s.cfg.NehemiahMode {
+			s.mgr.ExtendIfExpiring(id, 2*time.Minute)
+		}
+		resp, err := s.shellModel(guard.ctx, s.cfg, anthropicRequest{
 			Model:     s.cfg.AgentModel,
 			MaxTokens: 4096,
 			System:    shellAgentSystem,
@@ -108,7 +158,14 @@ func (s *Server) runShellAgent(w http.ResponseWriter, r *http.Request) {
 			Effort:    "low",
 		})
 		if err != nil {
-			guard.send("error", err.Error())
+			if guard.stopped() || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			if s.cfg.NehemiahMode {
+				guard.send("error", "the agent model is temporarily unavailable")
+			} else {
+				guard.send("error", err.Error())
+			}
 			return
 		}
 		messages = append(messages, assistantMessage(resp.Content))
@@ -139,9 +196,16 @@ func (s *Server) runShellAgent(w http.ResponseWriter, r *http.Request) {
 					results = append(results, textToolResult(b.ID, "(empty command)", true))
 					continue
 				}
+				if len(cmd) > shellAgentCommandLimit {
+					results = append(results, textToolResult(b.ID, "command exceeds the 16 KiB limit", true))
+					continue
+				}
 				guard.send("action", "$ "+cmd)
-				out := runGuestCommand(console, sub, cmd, 30*time.Second)
-				results = append(results, textToolResult(b.ID, out, false))
+				out, commandErr := runCommand(guard.ctx, cmd)
+				if guard.stopped() {
+					return
+				}
+				results = append(results, textToolResult(b.ID, out, commandErr))
 			}
 		}
 		if len(results) == 0 {
@@ -151,6 +215,205 @@ func (s *Server) runShellAgent(w http.ResponseWriter, r *http.Request) {
 		messages = append(messages, userToolResults(results))
 	}
 	guard.send("done", "reached the step limit")
+}
+
+type shellAgentStart struct {
+	Type    string `json:"type"`
+	Version int    `json:"version"`
+	Goal    string `json:"goal"`
+}
+
+func parseShellAgentStart(messageType int, payload []byte) (string, error) {
+	if messageType != websocket.TextMessage {
+		return "", errors.New("start frame must be text JSON")
+	}
+	if len(payload) == 0 || len(payload) > agentControlFrameLimit {
+		return "", errors.New("start frame exceeds the 64 KiB limit")
+	}
+	if !utf8.Valid(payload) {
+		return "", errors.New("start frame must be valid UTF-8")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var start shellAgentStart
+	if err := decoder.Decode(&start); err != nil {
+		return "", errors.New("invalid start frame")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", errors.New("invalid start frame")
+	}
+	goal := strings.TrimSpace(start.Goal)
+	if start.Type != "start" || start.Version != 1 || goal == "" || !utf8.ValidString(goal) || len(goal) > shellAgentGoalLimit {
+		return "", errors.New("invalid start frame")
+	}
+	return goal, nil
+}
+
+func rejectShellAgentStart(conn *websocket.Conn, closeCode int, code, message string) {
+	_ = conn.WriteJSON(map[string]string{"type": "error", "code": code, "text": message})
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(closeCode, code), time.Now().Add(time.Second))
+	_ = conn.Close()
+}
+
+func (s *Server) setupShellAgentGuard(w http.ResponseWriter, r *http.Request) (*agentGuard, string, bool) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return nil, "", false
+	}
+	conn.SetReadLimit(agentControlFrameLimit)
+	_ = conn.SetReadDeadline(time.Now().Add(shellAgentStartTimeout))
+	messageType, payload, err := conn.ReadMessage()
+	if err != nil {
+		code := websocket.ClosePolicyViolation
+		errorCode := "invalid_start_frame"
+		if strings.Contains(err.Error(), "read limit") {
+			code = websocket.CloseMessageTooBig
+			errorCode = "start_frame_too_large"
+		}
+		rejectShellAgentStart(conn, code, errorCode, "a valid start frame is required")
+		return nil, "", false
+	}
+	goal, err := parseShellAgentStart(messageType, payload)
+	if err != nil {
+		rejectShellAgentStart(conn, websocket.ClosePolicyViolation, "invalid_start_frame", err.Error())
+		return nil, "", false
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	stopKeepalive := startWebSocketKeepalive(conn)
+	send := func(typ, text string) {
+		if len(text) > agentControlFrameLimit {
+			const suffix = "…(truncated)"
+			text = text[:agentControlFrameLimit-len(suffix)] + suffix
+		}
+		_ = conn.WriteJSON(map[string]string{"type": typ, "text": text})
+	}
+	if s.cfg.AnthropicKey == "" {
+		send("error", "the agent isn't configured on this server")
+		stopKeepalive()
+		_ = conn.Close()
+		return nil, "", false
+	}
+	if n := agentRunsAdd(1); int(n) > s.cfg.AgentMaxConcurrent {
+		agentRunsAdd(-1)
+		send("error", "too many agents are running right now — try again in a moment")
+		stopKeepalive()
+		_ = conn.Close()
+		return nil, "", false
+	}
+	if !s.agentBudget.allow() {
+		agentRunsAdd(-1)
+		send("error", "the daily AI limit has been reached — please try again tomorrow")
+		stopKeepalive()
+		_ = conn.Close()
+		return nil, "", false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), shellAgentLifetime)
+	stop := make(chan struct{})
+	go func() {
+		defer close(stop)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				cancel()
+				return
+			}
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "shell_agent_lifetime_exceeded"), time.Now().Add(time.Second))
+		_ = conn.Close()
+	}()
+	stopped := func() bool {
+		select {
+		case <-ctx.Done():
+			return true
+		default:
+			return false
+		}
+	}
+	return &agentGuard{conn: conn, send: send, stopped: stopped, stop: stop, keepaliveStop: stopKeepalive, ctx: ctx, cancel: cancel}, goal, true
+}
+
+func (s *Server) managedShellGuestAgent(r *http.Request) (*guestAgentClient, error) {
+	id := r.PathValue("id")
+	leaseID := r.Header.Get("X-Nehemiah-Lease-ID")
+	s.mgr.mu.Lock()
+	machine := s.mgr.machines[id]
+	var driver *fcDriver
+	if machine != nil && machine.LeaseID == leaseID {
+		driver = machine.driver
+	}
+	s.mgr.mu.Unlock()
+	if machine == nil || driver == nil || leaseID == "" {
+		return nil, ErrGuestAgentUnavailable
+	}
+	return newManagedDriverGuestAgentClient(s.mgr, id, leaseID, driver), nil
+}
+
+func (s *Server) managedAgentVsock(ctx context.Context, r *http.Request, port int) (net.Conn, error) {
+	id := r.PathValue("id")
+	leaseID := r.Header.Get("X-Nehemiah-Lease-ID")
+	s.mgr.mu.Lock()
+	machine := s.mgr.machines[id]
+	var driver *fcDriver
+	if machine != nil && machine.LeaseID == leaseID {
+		driver = machine.driver
+	}
+	s.mgr.mu.Unlock()
+	if machine == nil || driver == nil || leaseID == "" {
+		return nil, ErrInvalidLease
+	}
+	conn, err := driver.DialVsockContext(ctx, port)
+	if err != nil {
+		return nil, err
+	}
+	s.mgr.mu.Lock()
+	valid := s.mgr.machines[id] == machine && machine.LeaseID == leaseID && machine.driver == driver
+	s.mgr.mu.Unlock()
+	if !valid {
+		_ = conn.Close()
+		return nil, ErrInvalidLease
+	}
+	return conn, nil
+}
+
+func runManagedShellCommand(ctx context.Context, client *guestAgentClient, id, command string) (string, bool) {
+	result, err := client.Exec(ctx, id, guestExecRequest{
+		Command:   command,
+		Timeout:   30 * time.Second,
+		MaxOutput: shellAgentOutputLimit,
+		PTY:       true,
+		Rows:      24,
+		Cols:      120,
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "[command canceled]", true
+		}
+		return "[guest command channel unavailable]", true
+	}
+	combined := result.PTY
+	if len(combined) == 0 {
+		combined = append(append([]byte(nil), result.Stdout...), result.Stderr...)
+	}
+	output := strings.Trim(stripANSI(string(combined)), "\r\n")
+	if output == "" {
+		output = "(no output)"
+	}
+	if len(output) > shellAgentContextOutput {
+		output = output[:shellAgentContextOutput] + "\n…(truncated)"
+	}
+	if result.TimedOut {
+		output += "\n[command timed out]"
+	} else if result.ExitCode != 0 {
+		output += fmt.Sprintf("\n[exit %d]", result.ExitCode)
+	}
+	if result.Truncated {
+		output += "\n[guest output exceeded 64 KiB]"
+	}
+	return output, result.ExitCode != 0 || result.TimedOut
 }
 
 // writeConsoleChunked writes to the guest serial in small pieces with brief

@@ -28,8 +28,8 @@ func validVolumePath(p string) bool {
 	return cleaned != "" && cleaned != "." && !strings.HasPrefix(cleaned, "/")
 }
 
-// HTTP surface for persistent volumes. Volumes are addressed by an unguessable
-// id (the capability); with no accounts yet, holding the id is holding access.
+// Local/self-hosted HTTP surface for persistent volumes. Volumes are addressed
+// by an unguessable id (the capability); holding the id is holding access.
 
 const volumeFileCap = 64 << 20 // 64 MiB per uploaded file
 

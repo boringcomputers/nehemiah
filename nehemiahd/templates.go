@@ -8,7 +8,7 @@ type Template struct {
 	MemSizeMB int
 	VCPUs     int
 	InitPath  string // init= kernel arg; empty => rootfs default (/sbin/init)
-	Vsock     bool   // configure a vsock device (VNC desktops use it)
+	Vsock     bool   // configure a vsock device (guest agent; VNC on desktops)
 	Snapshot  bool   // eligible for snapshot restore from TemplatesDir/<name>
 	Display   bool   // exposes a VNC framebuffer on guest vsock port 5900
 
@@ -57,6 +57,7 @@ func (c Config) Template(name string) Template {
 			Rootfs:    c.BaseRootfs,
 			MemSizeMB: c.MemSizeMB,
 			VCPUs:     c.VCPUs,
+			Vsock:     true,
 			Snapshot:  true,
 			Display:   false,
 		}

@@ -35,11 +35,15 @@ var templateNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 type templateMeta struct {
 	MemSizeMB      int    `json:"mem_size_mb"`
 	VCPUs          int    `json:"vcpus"`
+	DiskMB         int    `json:"disk_mb,omitempty"`
 	Vsock          bool   `json:"vsock"`
 	Display        bool   `json:"display"`
 	InitPath       string `json:"init_path,omitempty"`
 	HadNIC         bool   `json:"had_nic"`
 	SourceTemplate string `json:"source_template"`
+	Architecture   string `json:"architecture,omitempty"`
+	ArtifactSHA256 string `json:"artifact_sha256,omitempty"`
+	ArtifactBytes  int64  `json:"artifact_bytes,omitempty"`
 	CreatedAt      string `json:"created_at"`
 }
 
@@ -121,7 +125,11 @@ func (mgr *Manager) Publish(id, name, creatorIP string) (templateView, error) {
 
 	snapDir, err := drv.CreateSnapshot("pub-" + name)
 	if err != nil {
-		log.Printf("publish %s as %q: snapshot failed: %v", id, name, err)
+		if mgr.cfg.NehemiahMode {
+			logManagedHostEvent(managedHostEventSnapshotCreateFailed, managedHostLogFields{MachineID: id, Err: err})
+		} else {
+			log.Printf("publish %s as %q: snapshot failed: %v", id, name, err)
+		}
 		return templateView{}, ErrSnapshotUnavailable
 	}
 
@@ -165,7 +173,11 @@ func (mgr *Manager) Publish(id, name, creatorIP string) (templateView, error) {
 		CreatedAt:      meta.CreatedAt,
 		SourceTemplate: srcTemplate,
 	}
-	log.Printf("template %q published from machine %s (source=%s size=%dMB)", name, id, srcTemplate, view.SizeMB)
+	if mgr.cfg.NehemiahMode {
+		logManagedHostEvent(managedHostEventTemplatePublished, managedHostLogFields{MachineID: id, Count: int64(view.SizeMB)})
+	} else {
+		log.Printf("template %q published from machine %s (source=%s size=%dMB)", name, id, srcTemplate, view.SizeMB)
+	}
 	return view, nil
 }
 

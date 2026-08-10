@@ -1,28 +1,38 @@
 [Unit]
 Description=nehemiahd — Firecracker microVM sandbox daemon (Nehemiah)
 Documentation=https://github.com/boringcomputers/nehemiah
-After=network.target
+After=network.target boring-net.service
 Wants=network.target
+Requires=boring-net.service
+BindsTo=boring-net.service
+AssertPathExists=/etc/boring/managed-host
+AssertPathExists=/etc/boring/nehemiahd.env
 # The pre-rename unit ExecStarts the same daemon on the same port, so a host
 # upgraded in place must never run both.
 Conflicts=boringd.service
 
 [Service]
 Type=simple
-# Config (NEHEMIAH_TOKEN, NEHEMIAH_MAX, ...) is read from these env files.
-# Leading '-' makes each optional so nehemiahd still starts with no token set.
-# The legacy file is read first so the current one wins on any overlap; the
-# daemon also accepts the old BORING_* variable names (see getenv in config.go).
-EnvironmentFile=-/etc/boring/boringd.env
-EnvironmentFile=-/etc/boring/nehemiahd.env
-ExecStart=/usr/local/bin/nehemiahd
+# This signed unit is managed-only. The required environment and root-owned
+# marker are installed by verified cloud-init; prototype installs use the
+# separate nehemiahd-local.service unit.
+EnvironmentFile=/etc/boring/nehemiahd.env
+ExecStartPre=/opt/boring/bin/managed-host-preflight.sh
+# EnvironmentFile entries cannot turn a managed host into prototype mode.
+ExecStart=/usr/bin/env NEHEMIAH_MODE=1 /usr/local/bin/nehemiahd
 WorkingDirectory=/opt/boring
 Restart=always
 RestartSec=2
+# Managed Firecracker VMMs run in exact sibling nehemiah-vmm-*.scope units, so
+# the daemon's complete cgroup can be killed on restart without touching them.
+# The replacement daemon validates scope, PID, lease, socket and artifacts
+# before reattaching; unknown scopes are stopped during startup reconciliation.
+KillMode=control-group
 # nehemiahd launches firecracker children which need /dev/kvm and unix sockets.
 # It runs as root for the prototype (jailer/unprivileged is a hardening TODO).
 User=root
 Group=root
+UMask=0077
 # Give firecracker room for per-VM sockets/overlays and pipes.
 LimitNOFILE=1048576
 LimitNPROC=65536
@@ -30,8 +40,10 @@ LimitNPROC=65536
 # per-VM cgroup with CPU/memory/pids caps (untrusted-guest resource control).
 Delegate=yes
 # Keep the working state on the box.
-RuntimeDirectory=boring
-StateDirectory=boring
+RuntimeDirectory=nehemiahd
+RuntimeDirectoryMode=0700
+StateDirectory=nehemiahd
+StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target

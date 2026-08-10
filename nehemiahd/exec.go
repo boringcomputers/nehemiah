@@ -1,16 +1,15 @@
 package main
 
-// exec.go — deterministic command execution. POST /v1/machines/{id}/exec runs
-// one shell command in the guest over its serial console and returns the output
-// and exit code as JSON — no TTY WebSocket, no LLM in the loop. It shares the
-// console building blocks (chunked writes, prompt-watched capture, ANSI strip)
-// with the terminal agent in shellagent.go.
+// exec.go — deterministic command execution. It prefers the byte-exact vsock
+// guest agent. Managed mode returns a typed failure when that agent is unavailable;
+// only local/self-hosted mode may fall back to serial for older images.
 
 import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -24,9 +23,13 @@ type execRequest struct {
 }
 
 type execResponse struct {
-	Output     string `json:"output"`
-	ExitCode   *int   `json:"exit_code"` // null when the command timed out
+	Output     string `json:"output"` // compatibility: stdout followed by stderr
+	Stdout     string `json:"stdout"`
+	Stderr     string `json:"stderr"`
+	ExitCode   *int   `json:"exit_code"`
 	TimedOut   bool   `json:"timed_out"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	Transport  string `json:"transport,omitempty"`
 	DurationMS int64  `json:"duration_ms"`
 }
 
@@ -56,6 +59,45 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	timeout := execDefaultTimeout
 	if req.TimeoutSeconds > 0 {
 		timeout = min(time.Duration(req.TimeoutSeconds)*time.Second, execMaxTimeout)
+	}
+	release, ok := s.acquireGuestOperation(w, id)
+	if !ok {
+		return
+	}
+	defer release()
+
+	start := time.Now()
+	agentResult, agentErr := s.guestAgent().Exec(r.Context(), id, guestExecRequest{
+		Command:   req.Command,
+		Timeout:   timeout,
+		MaxOutput: execOutputCap,
+	})
+	if agentErr == nil {
+		code := agentResult.ExitCode
+		stdout, stderr := string(agentResult.Stdout), string(agentResult.Stderr)
+		writeJSON(w, http.StatusOK, execResponse{
+			Output:     stdout + stderr,
+			Stdout:     stdout,
+			Stderr:     stderr,
+			ExitCode:   &code,
+			TimedOut:   agentResult.TimedOut,
+			Truncated:  agentResult.Truncated,
+			Transport:  "vsock",
+			DurationMS: time.Since(start).Milliseconds(),
+		})
+		return
+	}
+	if s.cfg.NehemiahMode && !errors.Is(agentErr, ErrGuestAgentUnavailable) {
+		writeManagedGuestAgentFailed(w)
+		return
+	}
+	if !errors.Is(agentErr, ErrGuestAgentUnavailable) {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "guest agent exec failed: " + agentErr.Error()})
+		return
+	}
+	if s.cfg.NehemiahMode {
+		writeManagedGuestAgentUnavailable(w)
+		return
 	}
 
 	console, lock, ok := s.mgr.ConsoleLock(id)
@@ -90,9 +132,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	marker := "__EXIT_" + hex.EncodeToString(nb[:])
 	wrapped := "( " + req.Command + " ); echo " + marker + "=$?"
 
-	start := time.Now()
 	resp := execCapture(console, sub, wrapped, marker, timeout)
 	resp.DurationMS = time.Since(start).Milliseconds()
+	resp.Transport = "serial"
 
 	// A timed-out command is still running and would hog the console shell for
 	// every later exec (their input just queues behind it). Ctrl-C it so the
@@ -172,6 +214,10 @@ func execFinalize(raw, marker string, exitRe *regexp.Regexp, deadlineHit bool) e
 	}
 
 	resp := execResponse{TimedOut: deadlineHit}
+	if deadlineHit {
+		code := guestAgentTimeoutExitCode
+		resp.ExitCode = &code
+	}
 	if m := exitRe.FindStringSubmatchIndex(s); m != nil {
 		code, err := strconv.Atoi(s[m[2]:m[3]])
 		if err == nil {
@@ -190,5 +236,6 @@ func execFinalize(raw, marker string, exitRe *regexp.Regexp, deadlineHit bool) e
 		s = s[:execOutputCap] + "\n…(truncated)"
 	}
 	resp.Output = s
+	resp.Stdout = s // serial cannot distinguish stderr; preserve it as stdout
 	return resp
 }
