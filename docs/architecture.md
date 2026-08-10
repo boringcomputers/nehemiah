@@ -57,7 +57,7 @@ What we own vs. what we rent, and what migrates over time.
 
 - **R2** — object storage for images/snapshots/artifacts
 - **Cloudflare edge** — CDN, DNS, DDoS, WAF in front of Nehemiah
-- **Clerk** — auth / orgs / API keys
+- **Clerk** — dashboard user authentication; B.C owns authorization and API keys
 - **Stripe** — billing & metering
 - **Neon** — Postgres database behind Nehemiah
 - **OTel** — tracing / metrics / logs
@@ -72,6 +72,22 @@ What we own vs. what we rent, and what migrates over time.
 **RENT (commodity, never own):**
 
 - **Latitude.sh bare metal** — the physical hosts. Interchangeable capacity.
+
+## From the prototype to Nehemiah
+
+The one-box design below proves the Firecracker mechanism; it is not the managed
+service's public topology. Nehemiah keeps `nehemiahd` as a per-host data plane and
+adds a PostgreSQL-backed control plane plus a public gateway. Customers address
+global machine IDs through the gateway and never receive a host address or host
+credential. Gateway/control-plane peers reach Latitude hosts over an authenticated
+WireGuard overlay.
+
+The frozen private-beta contract—including authority, lifecycle/readiness,
+idempotency, tenancy, metering, and release-gating security controls—is documented
+in [`docs/nehemiah/architecture.md`](nehemiah/architecture.md), its
+[`adr/`](nehemiah/adr/) decisions, and the
+[threat model](nehemiah/threat-model.md). Those documents govern managed mode;
+the local/self-hosted prototype contract remains useful as a development target.
 
 ## One-box prototype
 
@@ -106,7 +122,7 @@ browser talks to nehemiahd over an SSH-tunneled WebSocket.
                             └────────────────────────────────────────────────────────┘
 ```
 
-### How the shell works (serial-over-stdio)
+### How the local shell works (serial-over-stdio)
 
 Each Machine is one `firecracker` child process that nehemiahd owns:
 
@@ -120,9 +136,14 @@ firecracker's **stdio**. nehemiahd owns that child's stdin/stdout pipes, so:
 - bytes nehemiahd writes to child **STDIN** → land on guest `/dev/ttyS0` (shell input)
 - bytes the child writes to **STDOUT** → are the guest serial console (shell output)
 
-The `/v1/machines/{id}/tty` WebSocket is just a byte pump between the client and
+In local/self-hosted mode, the `/v1/machines/{id}/tty` WebSocket is a byte pump between the client and
 this child stdio (binary frames both ways). The **same transport works for both
 cold-boot and snapshot-restored VMs**, which is why it's the guaranteed path.
+
+Nehemiah managed hosts do not expose daemon-owned Firecracker stdio as the
+customer terminal. Their VMMs live in sibling systemd scopes with null stdio;
+`/tty` opens a bounded guest-agent PTY over vsock and can reconnect after the
+daemon reattaches the persisted scope and sockets. Serial is recovery-only.
 
 ### Boot & lifecycle
 
@@ -146,7 +167,8 @@ skipped in v1 — the serial shell needs none, so nothing blocks VM creation.
 ### Control-plane contract
 
 nehemiahd listens on `0.0.0.0:8080`. If `NEHEMIAH_TOKEN` is set, `/v1/*` requires
-`Authorization: Bearer <token>` (the `/tty` WebSocket also accepts `?token=`);
+`Authorization: Bearer <token>` (local `/tty` also accepts `?token=`; managed
+hosts require header-only gateway and current-lease credentials);
 `/healthz` is always open.
 
 ```
@@ -156,7 +178,7 @@ GET    /v1/machines                  -> 200 {"machines":[<machine>...]}
 GET    /v1/machines/{id}             -> 200 <machine> | 404
 DELETE /v1/machines/{id}             -> 204 | 404
 POST   /v1/machines/{id}/branch      -> 201 <machine> | 501   (fork from snapshot; best-effort)
-GET    /v1/machines/{id}/tty         -> WebSocket, BINARY frames both ways (serial stdin/stdout)
+GET    /v1/machines/{id}/tty         -> WebSocket, BINARY frames both ways (managed guest-agent PTY; local serial)
 ```
 
 `<machine>` = `{"id","status","mode","boot_ms","template","created_at","expires_at"}`,
@@ -169,4 +191,6 @@ The prototype proves the mechanism (create → live shell → python3 → fork) 
 box. Not yet built, and required before this touches the public internet:
 **jailer + seccomp confinement, guest egress controls, a multi-host scheduler,
 persistent volumes, the desktop/action layer, and metering/billing.** These are
-the roadmap from "one working box" to the Machine platform described above.
+the roadmap from "one working box" to the Machine platform described above. The
+[Nehemiah security checklist](nehemiah/security-checklist.md) requires dated
+evidence for every P0 control before public beta.
