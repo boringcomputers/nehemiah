@@ -385,6 +385,27 @@ func TestHostTargetRejectsSSRFAddresses(t *testing.T) {
 	}
 }
 
+func TestProductionRejectsInsecurePreviewCookies(t *testing.T) {
+	cfg := testConfig(t, "https://control.example.com", "10.0.0.1", 8080)
+	cfg.Production = true
+	cfg.GatewayToken = strings.Repeat("g", 40)
+	cfg.CapabilitySecret = strings.Repeat("c", 40)
+	cfg.PreviewBaseDomain = "example-user-content.net"
+	cfg.TrustedSiteDomain = "example.com"
+	cfg.Telemetry = TelemetryConfig{
+		Enabled: true, Endpoint: "https://otel.example.net", Authorization: "Bearer telemetry-secret-value",
+		ServiceVersion: "2026.08.09", InstanceID: "gateway-ca-1-a", DeploymentEnv: "production",
+		Region: "ca-tor-1", ExportInterval: 15 * time.Second, ExportTimeout: 10 * time.Second, TraceSample: 0.1,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("secure production config rejected: %v", err)
+	}
+	cfg.SecurePreviewCookies = false
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("insecure preview cookies accepted in production")
+	}
+}
+
 func TestProductionConfigRequiresSeparateStrongTrustDomains(t *testing.T) {
 	cfg := testConfig(t, "https://control.example.com", "10.0.0.1", 8080)
 	cfg.Production = true

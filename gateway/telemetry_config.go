@@ -51,6 +51,7 @@ func loadTelemetryConfig(lookup environmentLookup) (TelemetryConfig, error) {
 		"NEHEMIAH_OTEL_EXPORT_INTERVAL_MS",
 		"NEHEMIAH_OTEL_EXPORT_TIMEOUT_MS",
 		"NEHEMIAH_OTEL_TRACE_SAMPLE_RATIO",
+		"NEHEMIAH_REGION",
 	}
 	rawEnabled, hasEnabled := lookup("NEHEMIAH_OTEL_ENABLED")
 	configured := hasEnabled

@@ -148,6 +148,9 @@ func (c Config) Validate() error {
 		if c.TrustedSiteDomain == "" {
 			return errors.New("NEHEMIAH_TRUSTED_SITE_DOMAIN is required in production")
 		}
+		if !c.SecurePreviewCookies {
+			return errors.New("NEHEMIAH_GATEWAY_INSECURE_PREVIEW_COOKIES cannot be set in production")
+		}
 	}
 	if c.PreviewBaseDomain != "" {
 		if net.ParseIP(c.PreviewBaseDomain) != nil || !validDNSName(c.PreviewBaseDomain) || !strings.Contains(c.PreviewBaseDomain, ".") {

@@ -537,6 +537,7 @@ func testConfig(t *testing.T, controlPlaneURL, hostAddress string, hostPort int)
 		StreamMaxDuration:              10 * time.Second,
 		ShutdownGrace:                  2 * time.Second,
 		MaxRequestBytes:                1 << 20,
+		SecurePreviewCookies:           true,
 		MaxConnectionsPerTenant:        4,
 		TenantBytesPerSecond:           64 << 20,
 		RESTRequestsPerWindow:          600,

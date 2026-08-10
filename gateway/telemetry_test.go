@@ -71,6 +71,14 @@ func TestTelemetryConfigurationIsExplicitAndTLSOnly(t *testing.T) {
 	}
 }
 
+func TestTelemetryRegionRequiresExplicitEnablement(t *testing.T) {
+	// A region-only deployment (no explicit telemetry enablement) must be rejected
+	// rather than silently accepted while the configured region is discarded.
+	if _, err := loadTelemetryConfig(telemetryEnvironment(map[string]string{"NEHEMIAH_REGION": "ca-tor-1"})); err == nil {
+		t.Fatal("NEHEMIAH_REGION without telemetry enablement was accepted")
+	}
+}
+
 func TestProductionTelemetryCredentialMustBeDistinct(t *testing.T) {
 	cfg, err := loadTelemetryConfig(telemetryEnvironment(validTelemetryEnvironment()))
 	if err != nil {
