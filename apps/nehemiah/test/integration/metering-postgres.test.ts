@@ -525,6 +525,34 @@ databaseDescribe('authoritative metering PostgreSQL contract', () => {
 		});
 	});
 
+	it('rejects a degraded final while the machine is still running', async () => {
+		const identity = await machine();
+		await metering.ingest(hostId, [
+			observation(identity, 1, 'start', 0n, 0n, '2026-08-08T12:00:00.000Z')
+		]);
+		const receipts = await metering.ingest(hostId, [
+			observation(identity, 2, 'final', 10n * second, 100n, '2026-08-08T12:00:10.000Z', {
+				quality: 'last_defensible',
+				qualityReason: 'runtime_unavailable'
+			})
+		]);
+		expect(receipts).toEqual([receipt(identity, 2, 'quarantined')]);
+		const evidence = await database.query<{
+			final_seen: boolean;
+			finalized: boolean;
+			exceptions: string;
+		}>(
+			`SELECT meter.final_seen,
+			 machine.usage_finalized_at IS NOT NULL AS finalized,
+			 (SELECT count(*)::text FROM metering_exceptions
+			  WHERE machine_id = machine.id AND reason = 'premature_final') AS exceptions
+			 FROM machines machine JOIN machine_meter_state meter ON meter.machine_id = machine.id
+			 WHERE machine.id = $1`,
+			[identity.machineId]
+		);
+		expect(evidence.rows[0]).toEqual({ final_seen: false, finalized: false, exceptions: '1' });
+	});
+
 	it('turns an integrity quarantine into stale-host loss and one durable fleet audit', async () => {
 		const corrupted = await machine();
 		const sibling = await machine();

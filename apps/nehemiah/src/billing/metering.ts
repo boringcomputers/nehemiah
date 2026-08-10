@@ -192,13 +192,19 @@ const observationIntegrityReason = (
 						nanosecondsPerSecond;
 		if (egressDelta > maximumEgressDelta) return 'egress_plausibility_exceeded';
 	}
-	if (
-		observation.kind === 'final' &&
-		observation.quality === 'exact' &&
-		!['stopping', 'stopped', 'failed', 'lost'].includes(identity.state) &&
-		receivedAt.getTime() < identity.expires_at.getTime() - maximumExactFinalLeadMs
-	) {
-		return 'premature_final';
+	if (observation.kind === 'final') {
+		const terminal = ['stopping', 'stopped', 'failed', 'lost'].includes(identity.state);
+		if (observation.quality === 'exact') {
+			if (!terminal && receivedAt.getTime() < identity.expires_at.getTime() - maximumExactFinalLeadMs) {
+				return 'premature_final';
+			}
+		} else if (!terminal) {
+			// A degraded final (e.g. last_defensible) must not close the meter while
+			// the machine is still running: doing so marks usage finalized and
+			// quarantines later runtime/egress, creating a billing gap. Require an
+			// actual terminal lifecycle state before a degraded final is accepted.
+			return 'premature_final';
+		}
 	}
 	return undefined;
 };
