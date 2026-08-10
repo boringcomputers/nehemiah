@@ -95,7 +95,10 @@ func (l *vsockListener) Accept() (net.Conn, error) {
 	if closed {
 		return nil, net.ErrClosed
 	}
-	nfd, peer, err := unix.Accept4(fd, unix.SOCK_CLOEXEC)
+	// SOCK_NONBLOCK makes the accepted fd pollable so os.NewFile registers it with
+	// the runtime poller. Without it, SetReadDeadline/SetWriteDeadline on vsockConn
+	// are silent no-ops and the initial-frame handshake timeout cannot fire.
+	nfd, peer, err := unix.Accept4(fd, unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK)
 	if err != nil {
 		if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EINVAL) {
 			return nil, net.ErrClosed

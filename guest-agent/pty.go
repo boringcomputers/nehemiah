@@ -66,14 +66,77 @@ func (s *agentServer) serveTTY(conn net.Conn, req protocolFrame) {
 	_ = w.send(protocolFrame{Type: frameResult, ExitCode: &code})
 }
 
+const ttyStdinBufferedFrames = 64
+
+// ptyInputPump writes terminal stdin to the PTY master on a dedicated goroutine
+// so a process that stops reading can never block the control-frame reader from
+// observing a client disconnect. It buffers a bounded number of frames and drops
+// input under sustained backpressure. write and close are safe to call from
+// different goroutines.
+type ptyInputPump struct {
+	ch   chan []byte
+	stop chan struct{}
+	once sync.Once
+}
+
+func startPTYInputPump(master io.Writer) *ptyInputPump {
+	p := &ptyInputPump{ch: make(chan []byte, ttyStdinBufferedFrames), stop: make(chan struct{})}
+	go func() {
+		for {
+			select {
+			case <-p.stop:
+				return
+			case data := <-p.ch:
+				if _, err := master.Write(data); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return p
+}
+
+// write enqueues stdin without blocking; input is dropped if the buffer is full
+// so the caller's read loop is never stalled by a backpressured terminal.
+func (p *ptyInputPump) write(data []byte) {
+	select {
+	case <-p.stop:
+		return
+	default:
+	}
+	buf := append([]byte(nil), data...)
+	select {
+	case p.ch <- buf:
+	case <-p.stop:
+	default:
+	}
+}
+
+// Write lets the pump stand in for the PTY master as an io.Writer.
+func (p *ptyInputPump) Write(data []byte) (int, error) {
+	p.write(data)
+	return len(data), nil
+}
+
+func (p *ptyInputPump) close() { p.once.Do(func() { close(p.stop) }) }
+
 func watchTTYControlFrames(conn net.Conn, cancel context.CancelFunc, master *os.File, w *lockedFrameWriter) {
+	// Terminal stdin is written through a non-blocking pump so a process that
+	// stops reading cannot block this loop from observing a client disconnect.
+	pump := startPTYInputPump(master)
+	defer pump.close()
 	for {
 		frame, err := readFrame(conn)
 		if err != nil {
 			cancel()
 			return
 		}
-		if err := applyTTYControlFrame(master, frame); err != nil {
+		// Route stdin through the pump; resize needs the real *os.File master.
+		target := io.Writer(pump)
+		if frame.Type != frameStdin {
+			target = master
+		}
+		if err := applyTTYControlFrame(target, frame); err != nil {
 			_ = w.send(protocolFrame{Type: frameError, Code: "invalid_tty_frame", Error: err.Error()})
 			cancel()
 			return
@@ -149,10 +212,12 @@ func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, con
 
 	done := make(chan struct{})
 	go killProcessGroupOnCancel(ctx, cmd, done)
+	pump := startPTYInputPump(master)
+	defer pump.close()
 	go watchControlFrames(conn, cancel, func(f protocolFrame) {
 		switch f.Type {
 		case frameStdin:
-			_, _ = master.Write(f.Data)
+			pump.write(f.Data)
 		case frameResize:
 			_ = setPTYSize(master, f.Rows, f.Cols)
 		}

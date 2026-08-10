@@ -4,7 +4,13 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 )
+
+// initialFrameTimeout bounds how long a freshly accepted connection may take to
+// deliver its first request frame. It stops a silent or partial-header peer from
+// holding a connection slot indefinitely. It is a var so tests can shorten it.
+var initialFrameTimeout = 10 * time.Second
 
 const maxConcurrentTTYSessions = 32
 
@@ -63,10 +69,16 @@ func (s *agentServer) releaseTTY() { <-s.ttySlots }
 // and closing an exec connection is an unambiguous cancellation signal.
 func (s *agentServer) serveConn(conn net.Conn) {
 	defer conn.Close()
+	// A connection slot is already held on our behalf. Bound the handshake so a
+	// peer that never completes the first frame releases the slot on timeout.
+	_ = conn.SetReadDeadline(time.Now().Add(initialFrameTimeout))
 	req, err := readFrame(conn)
 	if err != nil {
 		return
 	}
+	// The request arrived; clear the handshake deadline so long-lived operations
+	// (exec/tty streaming, uploads) are not cut off.
+	_ = conn.SetReadDeadline(time.Time{})
 	if req.Version != 0 && req.Version != protocolVersion {
 		_ = writeFrame(conn, protocolFrame{Type: frameError, Error: fmt.Sprintf("unsupported protocol version %d", req.Version)})
 		return
