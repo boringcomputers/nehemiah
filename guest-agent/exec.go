@@ -35,22 +35,30 @@ type lockedFrameWriter struct {
 	terminalSent     bool
 }
 
-// sendTerminal sends a terminal frame (an error or a result) at most once, so a
-// session has exactly one terminal outcome. A control-frame error and the final
-// result must not both reach the client for the same operation.
+// send writes a non-terminal frame (readiness, streamed output). It is dropped if
+// a terminal frame has already been sent, so no output can trail the terminal
+// outcome and be misassociated with a later operation.
+func (w *lockedFrameWriter) send(f protocolFrame) error {
+	return w.write(f, false)
+}
+
+// sendTerminal writes a terminal frame (an error or a result) at most once, so a
+// session has exactly one terminal outcome and it is the last frame on the wire.
 func (w *lockedFrameWriter) sendTerminal(f protocolFrame) error {
+	return w.write(f, true)
+}
+
+func (w *lockedFrameWriter) write(f protocolFrame, terminal bool) error {
 	w.mu.Lock()
 	if w.terminalSent {
+		// The session already emitted its single terminal frame; drop anything
+		// after it (a late output frame or a second terminal frame).
 		w.mu.Unlock()
 		return nil
 	}
-	w.terminalSent = true
-	w.mu.Unlock()
-	return w.send(f)
-}
-
-func (w *lockedFrameWriter) send(f protocolFrame) error {
-	w.mu.Lock()
+	if terminal {
+		w.terminalSent = true
+	}
 	if w.setWriteDeadline != nil {
 		deadline := time.Now().Add(frameWriteTimeout)
 		// Once the session is cancelled, bound sends tightly so teardown does not

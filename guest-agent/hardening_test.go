@@ -173,17 +173,21 @@ func TestTTYOverflowEmitsSingleTerminalFrame(t *testing.T) {
 	}()
 
 	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Second))
-	var sawError, sawResult bool
+	var sawError, sawResult, frameAfterTerminal bool
+	terminal := false
 	for {
 		f, err := readFrame(conn)
 		if err != nil {
 			break // conn closed after the single terminal frame
 		}
+		if terminal {
+			frameAfterTerminal = true
+		}
 		switch f.Type {
 		case frameError:
-			sawError = true
+			sawError, terminal = true, true
 		case frameResult:
-			sawResult = true
+			sawResult, terminal = true, true
 		}
 	}
 	if !sawError {
@@ -191,6 +195,9 @@ func TestTTYOverflowEmitsSingleTerminalFrame(t *testing.T) {
 	}
 	if sawResult {
 		t.Fatal("received both an error and a result frame for one terminal session")
+	}
+	if frameAfterTerminal {
+		t.Fatal("a frame was delivered after the terminal frame")
 	}
 	<-done
 }
@@ -215,17 +222,21 @@ func TestPTYExecOverflowEmitsSingleTerminalFrame(t *testing.T) {
 	}()
 
 	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Second))
-	var sawError, sawResult bool
+	var sawError, sawResult, frameAfterTerminal bool
+	terminal := false
 	for {
 		f, err := readFrame(conn)
 		if err != nil {
 			break
 		}
+		if terminal {
+			frameAfterTerminal = true
+		}
 		switch f.Type {
 		case frameError:
-			sawError = true
+			sawError, terminal = true, true
 		case frameResult:
-			sawResult = true
+			sawResult, terminal = true, true
 		}
 	}
 	if !sawError {
@@ -233,6 +244,9 @@ func TestPTYExecOverflowEmitsSingleTerminalFrame(t *testing.T) {
 	}
 	if sawResult {
 		t.Fatal("received both an error and a result frame for one PTY exec operation")
+	}
+	if frameAfterTerminal {
+		t.Fatal("a frame was delivered after the terminal frame")
 	}
 	<-done
 }
