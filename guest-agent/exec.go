@@ -50,16 +50,20 @@ func (w *lockedFrameWriter) forceOutcome(f protocolFrame) {
 }
 
 // finalize delivers the session's single terminal frame: the recorded forced
-// outcome if any, otherwise the provided result. It is the only terminal sender
-// on the completion path, so no error/result race can drop the real outcome.
+// outcome if any, otherwise the provided result. Outcome selection and the write
+// happen under one lock hold, so a forceOutcome recorded concurrently is never
+// lost — it is either seen here or ignored because the terminal was already sent.
 func (w *lockedFrameWriter) finalize(result protocolFrame) {
 	w.mu.Lock()
 	frame := result
 	if w.forced != nil {
 		frame = *w.forced
 	}
+	err := w.writeLocked(frame, true)
 	w.mu.Unlock()
-	_ = w.sendTerminal(frame)
+	if err != nil && w.cancel != nil {
+		w.cancel()
+	}
 }
 
 // send writes a non-terminal frame (readiness, streamed output). It is dropped if
@@ -77,17 +81,23 @@ func (w *lockedFrameWriter) sendTerminal(f protocolFrame) error {
 
 func (w *lockedFrameWriter) write(f protocolFrame, terminal bool) error {
 	w.mu.Lock()
+	err := w.writeLocked(f, terminal)
+	w.mu.Unlock()
+	if err != nil && w.cancel != nil {
+		w.cancel()
+	}
+	return err
+}
+
+// writeLocked writes a frame; the caller must hold w.mu. It returns nil (dropping
+// the frame) once a terminal frame has been sent, and for non-terminal output
+// once the session is cancelled, so teardown is not delayed and nothing trails
+// the single terminal frame.
+func (w *lockedFrameWriter) writeLocked(f protocolFrame, terminal bool) error {
 	if w.terminalSent {
-		// The session already emitted its single terminal frame; drop anything
-		// after it (a late output frame or a second terminal frame).
-		w.mu.Unlock()
 		return nil
 	}
-	// Once cancelled, drop streamed (non-terminal) output so teardown is not
-	// delayed delivering now-moot output to a client that may have stopped
-	// reading. The single terminal frame is still delivered (bounded).
 	if !terminal && w.ctx != nil && w.ctx.Err() != nil {
-		w.mu.Unlock()
 		return nil
 	}
 	if terminal {
@@ -103,12 +113,7 @@ func (w *lockedFrameWriter) write(f protocolFrame, terminal bool) error {
 		}
 		_ = w.setWriteDeadline(deadline)
 	}
-	err := writeFrame(w.w, f)
-	w.mu.Unlock()
-	if err != nil && w.cancel != nil {
-		w.cancel()
-	}
-	return err
+	return writeFrame(w.w, f)
 }
 
 type outputBudget struct {
