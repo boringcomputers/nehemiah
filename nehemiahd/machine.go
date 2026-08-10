@@ -1134,6 +1134,24 @@ func (mgr *Manager) create(template string, ttlSeconds int, net, persistent bool
 		mgr.limiter.Release(creatorIP)
 		return nil, ErrHostUnhealthy
 	}
+	// A lease credential must authorize exactly one live machine. Same-key replays
+	// were already handled upstream, so reaching here with a lease (or public id)
+	// that another live machine already owns is a distinct, conflicting request.
+	// This mirrors the managed-fork collision check.
+	if options.LeaseID != "" {
+		newPublicID := ""
+		if options.Metadata != nil {
+			newPublicID = options.Metadata["public_machine_id"]
+		}
+		for _, machine := range mgr.machines {
+			samePublicID := newPublicID != "" && machine.Metadata != nil && machine.Metadata["public_machine_id"] == newPublicID
+			if machine.LeaseID == options.LeaseID || samePublicID {
+				mgr.mu.Unlock()
+				mgr.limiter.Release(creatorIP)
+				return nil, fmt.Errorf("%w: lease or public id is already held by a live machine", ErrIdempotencyConflict)
+			}
+		}
+	}
 	if len(mgr.machines) >= mgr.cfg.MaxMachines || !mgr.hasMemoryFor(tpl) {
 		mgr.mu.Unlock()
 		mgr.limiter.Release(creatorIP)

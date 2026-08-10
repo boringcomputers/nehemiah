@@ -177,6 +177,42 @@ func TestInternalMachineCreateIsIdempotentAndStoresOpaqueLease(t *testing.T) {
 	}
 }
 
+// A lease credential must authorize exactly one live machine. Two creates with
+// different idempotency keys but the same lease id must not both succeed, or the
+// same credential would authorize operations against two distinct machines.
+func TestInternalMachineCreateRejectsDuplicateLiveLease(t *testing.T) {
+	cfg := internalTestConfig(t)
+	cfg.JailerEnable = true
+	mgr := NewManager(cfg)
+	mgr.readyProbe = func(context.Context, string) error { return nil }
+	mgr.boot = func(cfg Config, id string, template Template, snapshot string, restoreNet, network bool, diskMB int) (*fcDriver, string, int64, error) {
+		return &fcDriver{cfg: cfg, id: id, tpl: template, jailed: true, network: network}, "coldboot", 3, nil
+	}
+	server := NewServer(cfg, mgr)
+	create := func(idemKey, leaseID, publicID string) *httptest.ResponseRecorder {
+		body := `{"template":"python","persistent":true,"lease_id":"` + leaseID + `","metadata":{"public_machine_id":"` + publicID + `"}}`
+		request := internalRequest(http.MethodPost, "/internal/v1/machines", cfg.InternalToken, bytes.NewBufferString(body))
+		request.Header.Set("Idempotency-Key", idemKey)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	first := create("key-a", "lease-shared", "public-a")
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first status = %d: %s", first.Code, first.Body.String())
+	}
+	// Different idempotency key, same lease id (distinct public id) must be rejected.
+	second := create("key-b", "lease-shared", "public-b")
+	if second.Code != http.StatusConflict {
+		t.Fatalf("duplicate-lease status = %d, want 409 conflict: %s", second.Code, second.Body.String())
+	}
+	// A distinct lease still succeeds.
+	third := create("key-c", "lease-other", "public-c")
+	if third.Code != http.StatusCreated {
+		t.Fatalf("distinct-lease status = %d, want 201: %s", third.Code, third.Body.String())
+	}
+}
+
 func TestInternalCreateDoesNotCollapseFleetCapacityIntoPublicPerIPLimit(t *testing.T) {
 	cfg := internalTestConfig(t)
 	cfg.JailerEnable = true
