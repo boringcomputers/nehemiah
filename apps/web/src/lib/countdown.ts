@@ -2,7 +2,7 @@ import type { Machine } from '$lib/boring';
 
 /** Manages a self-decrementing countdown from a machine's expiry or a fixed TTL. */
 export function createCountdown(
-	ttl: number,
+	ttl: () => number,
 	onTick: (remaining: number) => void
 ): {
 	start: (machine: Machine | null) => void;
@@ -15,7 +15,7 @@ export function createCountdown(
 		stop();
 		remaining = machine?.expires_at
 			? Math.max(0, Math.round((new Date(machine.expires_at).getTime() - Date.now()) / 1000))
-			: ttl;
+			: ttl();
 		onTick(remaining);
 		interval = setInterval(() => {
 			remaining -= 1;

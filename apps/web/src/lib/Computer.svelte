@@ -32,7 +32,10 @@
 	let termHandle: TerminalHandle | null = null;
 	let agentWs: WebSocket | null = null;
 
-	const timer = createCountdown(ttl, (r) => (remaining = r));
+	const timer = createCountdown(
+		() => ttl,
+		(r) => (remaining = r)
+	);
 
 	// The component only mounts once the user has asked for a computer, so boot
 	// immediately (bind:this on the parent isn't populated until after mount).
