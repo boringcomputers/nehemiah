@@ -371,7 +371,10 @@
 		const requestedPort = previewPort;
 		try {
 			const session = await issueSession(id, 'preview');
-			if (generation !== previewGeneration) {
+			// Abandon the preview if the user switched projects (previewGeneration) or
+			// selected a different machine. Connecting a TTY/VNC session leaves the
+			// selection unchanged, so a valid pending preview is not cancelled.
+			if (generation !== previewGeneration || id !== selectedMachineId) {
 				popup?.close();
 				return;
 			}
