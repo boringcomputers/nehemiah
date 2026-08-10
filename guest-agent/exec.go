@@ -16,16 +16,36 @@ const (
 	timeoutExitCode       = 124
 	defaultCommandTimeout = 30 * time.Second
 	maxCommandTimeout     = 120 * time.Second
+	// frameWriteTimeout bounds a single response-frame write. A client that stops
+	// reading response frames must not be able to hold the frame mutex and stall
+	// session cancellation or cleanup indefinitely.
+	frameWriteTimeout = 10 * time.Second
+	// teardownWriteTimeout bounds response writes once the session is cancelled.
+	// It is short enough that a non-reading client cannot delay slot release, yet
+	// long enough that a reading client still receives the final result frame.
+	teardownWriteTimeout = 2 * time.Second
 )
 
 type lockedFrameWriter struct {
-	mu     sync.Mutex
-	w      io.Writer
-	cancel context.CancelFunc
+	mu               sync.Mutex
+	w                io.Writer
+	setWriteDeadline func(time.Time) error
+	ctx              context.Context
+	cancel           context.CancelFunc
 }
 
 func (w *lockedFrameWriter) send(f protocolFrame) error {
 	w.mu.Lock()
+	if w.setWriteDeadline != nil {
+		deadline := time.Now().Add(frameWriteTimeout)
+		// Once the session is cancelled, bound sends tightly so teardown does not
+		// wait on a client that has stopped reading — while still leaving enough
+		// time for a reading client to receive the final result frame.
+		if w.ctx != nil && w.ctx.Err() != nil {
+			deadline = time.Now().Add(teardownWriteTimeout)
+		}
+		_ = w.setWriteDeadline(deadline)
+	}
 	err := writeFrame(w.w, f)
 	w.mu.Unlock()
 	if err != nil && w.cancel != nil {
@@ -88,8 +108,11 @@ func (s *agentServer) serveExec(conn net.Conn, req protocolFrame) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	// On cancellation, interrupt any in-flight response write so teardown never
+	// waits on a client that has stopped reading response frames.
+	go func() { <-ctx.Done(); _ = conn.SetWriteDeadline(time.Now().Add(teardownWriteTimeout)) }()
 
-	w := &lockedFrameWriter{w: conn, cancel: cancel}
+	w := &lockedFrameWriter{w: conn, setWriteDeadline: conn.SetWriteDeadline, ctx: ctx, cancel: cancel}
 	budget := newOutputBudget(req.MaxOutput)
 	if req.PTY {
 		s.runPTY(ctx, cancel, conn, w, budget, req)

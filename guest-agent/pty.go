@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -22,6 +23,9 @@ import (
 func (s *agentServer) serveTTY(conn net.Conn, req protocolFrame) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// On cancellation, interrupt any in-flight response write so teardown never
+	// waits on a client that has stopped reading response frames.
+	go func() { <-ctx.Done(); _ = conn.SetWriteDeadline(time.Now().Add(teardownWriteTimeout)) }()
 
 	master, slave, err := openPTY(req.Rows, req.Cols)
 	if err != nil {
@@ -43,7 +47,7 @@ func (s *agentServer) serveTTY(conn net.Conn, req protocolFrame) {
 	}
 	_ = slave.Close()
 
-	w := &lockedFrameWriter{w: conn, cancel: cancel}
+	w := &lockedFrameWriter{w: conn, setWriteDeadline: conn.SetWriteDeadline, ctx: ctx, cancel: cancel}
 	if err := w.send(protocolFrame{Version: protocolVersion, Type: frameTTYReady}); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -146,8 +150,10 @@ func watchTTYControlFrames(conn net.Conn, cancel context.CancelFunc, master *os.
 			target = master
 		}
 		if err := applyTTYControlFrame(target, frame); err != nil {
-			_ = w.send(protocolFrame{Type: frameError, Code: "invalid_tty_frame", Error: err.Error()})
+			// Cancel first: the best-effort error frame must never delay teardown
+			// if the client has stopped reading responses.
 			cancel()
+			_ = w.send(protocolFrame{Type: frameError, Code: "invalid_tty_frame", Error: err.Error()})
 			return
 		}
 		if frame.Type == frameCancel {
@@ -227,8 +233,9 @@ func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, con
 		switch f.Type {
 		case frameStdin:
 			if err := pump.enqueue(f.Data); err != nil {
-				_ = w.send(protocolFrame{Type: frameError, Code: "tty_input_overflow", Error: err.Error()})
+				// Cancel first so a client that stopped reading cannot delay teardown.
 				cancel()
+				_ = w.send(protocolFrame{Type: frameError, Code: "tty_input_overflow", Error: err.Error()})
 			}
 		case frameResize:
 			_ = setPTYSize(master, f.Rows, f.Cols)

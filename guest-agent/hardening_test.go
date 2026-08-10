@@ -108,3 +108,40 @@ func TestPTYInputPumpBackpressureIsExplicitNotSilent(t *testing.T) {
 		t.Fatalf("pump accepted only %d frames before overflow, want >= %d", accepted, ttyStdinBufferedFrames)
 	}
 }
+
+// TestTTYOverflowReleasesWhileClientNotReading is the regression for the
+// send-before-cancel finding: when input overflows and the client has stopped
+// reading response frames, the session must still cancel and release its slots
+// promptly — without waiting for the client to disconnect. The overflow handler
+// cancels before its best-effort send, and cancellation interrupts in-flight
+// writes, so teardown does not depend on the client reading.
+func TestTTYOverflowReleasesWhileClientNotReading(t *testing.T) {
+	conn, done := startTestConn(t)
+	defer conn.Close()
+
+	if err := writeFrame(conn, protocolFrame{Version: protocolVersion, Type: frameTTY, Rows: 30, Cols: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if ready, err := readFrame(conn); err != nil || ready.Type != frameTTYReady {
+		t.Fatalf("terminal handshake = %#v (err %v)", ready, err)
+	}
+	// Run a process that does not read stdin, so the PTY input backpressures.
+	if err := writeFrame(conn, protocolFrame{Type: frameStdin, Data: []byte("sleep 30\n")}); err != nil {
+		t.Fatal(err)
+	}
+	// Flood stdin to overflow the pump while deliberately never reading responses.
+	go func() {
+		payload := make([]byte, 4096)
+		for i := 0; i < 500; i++ {
+			if err := writeFrame(conn, protocolFrame{Type: frameStdin, Data: payload}); err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		t.Fatal("session did not release after input overflow while the client stopped reading responses")
+	}
+}
