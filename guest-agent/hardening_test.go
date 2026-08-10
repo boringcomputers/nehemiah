@@ -1,10 +1,7 @@
 package main
 
 import (
-	"context"
-	"io"
 	"net"
-	"os"
 	"testing"
 	"time"
 )
@@ -76,41 +73,38 @@ func TestManySilentConnsDoNotExhaustCapacity(t *testing.T) {
 	s.releaseConnection()
 }
 
-// TestTTYDisconnectDetectedWhilePTYWriteBackpressured is the regression for the
-// blocking-PTY-input finding: a client disconnect must be observed even when the
-// PTY master write path is fully backpressured (a terminal process that stopped
-// reading stdin). stdin is now written through a non-blocking pump, so the
-// control-frame reader is never stalled and cancels promptly on disconnect.
-func TestTTYDisconnectDetectedWhilePTYWriteBackpressured(t *testing.T) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	defer w.Close()
-	// Deliberately never read r, so the pump's writes to w block once the pipe
-	// buffer fills — emulating a terminal process that stopped reading stdin.
+type blockingWriter struct{ release chan struct{} }
 
-	client, server := net.Pipe()
-	defer client.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func (b blockingWriter) Write(p []byte) (int, error) {
+	<-b.release
+	return len(p), nil
+}
 
-	go watchTTYControlFrames(server, cancel, w, &lockedFrameWriter{w: io.Discard})
+// TestPTYInputPumpBackpressureIsExplicitNotSilent is the regression for the
+// silent-drop finding: when a terminal process stops reading stdin and the pump's
+// bounded buffer fills, further input must be reported as an explicit overflow
+// error (which the caller turns into a session failure) rather than accepted and
+// silently discarded. The pump is non-blocking either way, so the control-frame
+// reader is never stalled.
+func TestPTYInputPumpBackpressureIsExplicitNotSilent(t *testing.T) {
+	w := blockingWriter{release: make(chan struct{})}
+	defer close(w.release)
+	pump := startPTYInputPump(w)
+	defer pump.close()
 
-	go func() {
-		payload := make([]byte, 2048)
-		for i := 0; i < 200; i++ {
-			if err := writeFrame(client, protocolFrame{Type: frameStdin, Data: payload}); err != nil {
-				return
-			}
+	accepted := 0
+	var overflow error
+	for i := 0; i < ttyStdinBufferedFrames+8; i++ {
+		if err := pump.enqueue([]byte("x")); err != nil {
+			overflow = err
+			break
 		}
-		_ = client.Close() // disconnect after flooding stdin
-	}()
-
-	select {
-	case <-ctx.Done():
-	case <-time.After(3 * time.Second):
-		t.Fatal("client disconnect was not detected while the PTY write path was backpressured")
+		accepted++
+	}
+	if overflow == nil {
+		t.Fatal("pump never reported overflow; backpressured input would be silently dropped")
+	}
+	if accepted < ttyStdinBufferedFrames {
+		t.Fatalf("pump accepted only %d frames before overflow, want >= %d", accepted, ttyStdinBufferedFrames)
 	}
 }

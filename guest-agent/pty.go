@@ -96,25 +96,34 @@ func startPTYInputPump(master io.Writer) *ptyInputPump {
 	return p
 }
 
-// write enqueues stdin without blocking; input is dropped if the buffer is full
-// so the caller's read loop is never stalled by a backpressured terminal.
-func (p *ptyInputPump) write(data []byte) {
+var errPTYInputOverflow = errors.New("terminal input buffer overflow")
+
+// enqueue submits stdin without blocking, so the caller's read loop is never
+// stalled by a backpressured terminal. When the bounded buffer is full (sustained
+// backpressure) it returns errPTYInputOverflow instead of silently dropping input,
+// letting the caller fail the session explicitly rather than lose data.
+func (p *ptyInputPump) enqueue(data []byte) error {
 	select {
 	case <-p.stop:
-		return
+		return nil
 	default:
 	}
-	buf := append([]byte(nil), data...)
 	select {
-	case p.ch <- buf:
+	case p.ch <- append([]byte(nil), data...):
+		return nil
 	case <-p.stop:
+		return nil
 	default:
+		return errPTYInputOverflow
 	}
 }
 
-// Write lets the pump stand in for the PTY master as an io.Writer.
+// Write lets the pump stand in for the PTY master as an io.Writer; overflow is
+// surfaced as a write error rather than a silent drop.
 func (p *ptyInputPump) Write(data []byte) (int, error) {
-	p.write(data)
+	if err := p.enqueue(data); err != nil {
+		return 0, err
+	}
 	return len(data), nil
 }
 
@@ -217,7 +226,10 @@ func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, con
 	go watchControlFrames(conn, cancel, func(f protocolFrame) {
 		switch f.Type {
 		case frameStdin:
-			pump.write(f.Data)
+			if err := pump.enqueue(f.Data); err != nil {
+				_ = w.send(protocolFrame{Type: frameError, Code: "tty_input_overflow", Error: err.Error()})
+				cancel()
+			}
 		case frameResize:
 			_ = setPTYSize(master, f.Rows, f.Cols)
 		}
