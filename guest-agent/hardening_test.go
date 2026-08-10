@@ -194,3 +194,45 @@ func TestTTYOverflowEmitsSingleTerminalFrame(t *testing.T) {
 	}
 	<-done
 }
+
+// TestPTYExecOverflowEmitsSingleTerminalFrame is the same single-terminal-frame
+// guarantee for the PTY exec path (frameExec with PTY set), which runs through
+// runPTY rather than serveTTY.
+func TestPTYExecOverflowEmitsSingleTerminalFrame(t *testing.T) {
+	conn, done := startTestConn(t)
+	defer conn.Close()
+
+	if err := writeFrame(conn, protocolFrame{Version: protocolVersion, Type: frameExec, Command: "sleep 30", PTY: true, Rows: 30, Cols: 100}); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		payload := make([]byte, 4096)
+		for i := 0; i < 500; i++ {
+			if err := writeFrame(conn, protocolFrame{Type: frameStdin, Data: payload}); err != nil {
+				return
+			}
+		}
+	}()
+
+	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+	var sawError, sawResult bool
+	for {
+		f, err := readFrame(conn)
+		if err != nil {
+			break
+		}
+		switch f.Type {
+		case frameError:
+			sawError = true
+		case frameResult:
+			sawResult = true
+		}
+	}
+	if !sawError {
+		t.Fatal("expected a terminal error frame on PTY exec input overflow")
+	}
+	if sawResult {
+		t.Fatal("received both an error and a result frame for one PTY exec operation")
+	}
+	<-done
+}

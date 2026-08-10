@@ -204,7 +204,7 @@ func streamTTY(wg *sync.WaitGroup, r io.Reader, w *lockedFrameWriter) {
 func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, conn net.Conn, w *lockedFrameWriter, budget *outputBudget, req protocolFrame) {
 	master, slave, err := openPTY(req.Rows, req.Cols)
 	if err != nil {
-		_ = w.send(protocolFrame{Type: frameError, Error: "pty unavailable: " + err.Error()})
+		_ = w.sendTerminal(protocolFrame{Type: frameError, Error: "pty unavailable: " + err.Error()})
 		return
 	}
 	defer master.Close()
@@ -217,7 +217,7 @@ func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, con
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := cmd.Start(); err != nil {
-		_ = w.send(protocolFrame{Type: frameError, Error: err.Error()})
+		_ = w.sendTerminal(protocolFrame{Type: frameError, Error: err.Error()})
 		return
 	}
 	_ = slave.Close()
@@ -251,7 +251,7 @@ func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, con
 	_ = master.Close()
 	reader.Wait()
 	code, timedOut := commandResult(ctx, waitErr)
-	_ = w.send(protocolFrame{Type: frameResult, ExitCode: &code, TimedOut: timedOut, Truncated: budget.wasTruncated()})
+	_ = w.sendTerminal(protocolFrame{Type: frameResult, ExitCode: &code, TimedOut: timedOut, Truncated: budget.wasTruncated()})
 }
 
 func streamPTY(wg *sync.WaitGroup, r io.Reader, w *lockedFrameWriter, budget *outputBudget) {

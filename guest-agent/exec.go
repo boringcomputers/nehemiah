@@ -147,16 +147,16 @@ func (s *agentServer) runPiped(ctx context.Context, cancel context.CancelFunc, c
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		_ = w.send(protocolFrame{Type: frameError, Error: err.Error()})
+		_ = w.sendTerminal(protocolFrame{Type: frameError, Error: err.Error()})
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		_ = w.send(protocolFrame{Type: frameError, Error: err.Error()})
+		_ = w.sendTerminal(protocolFrame{Type: frameError, Error: err.Error()})
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		_ = w.send(protocolFrame{Type: frameError, Error: err.Error()})
+		_ = w.sendTerminal(protocolFrame{Type: frameError, Error: err.Error()})
 		return
 	}
 
