@@ -101,7 +101,7 @@ REMOTE_BUILD
 
 # ---- 3. install systemd unit + env ------------------------------------------
 echo "==> [3/5] installing systemd unit + env file"
-scp "${SSH_OPTS[@]}" "${SCRIPT_DIR}/nehemiahd.service" "${REMOTE}:/etc/systemd/system/nehemiahd.service"
+scp "${SSH_OPTS[@]}" "${SCRIPT_DIR}/nehemiahd-local.service" "${REMOTE}:/etc/systemd/system/nehemiahd.service"
 
 # Write /etc/boring/nehemiahd.env. Only set NEHEMIAH_TOKEN if provided; never echo it.
 if [[ -n "${NEHEMIAH_TOKEN}" ]]; then

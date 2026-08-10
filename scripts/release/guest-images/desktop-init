@@ -1,0 +1,76 @@
+#!/bin/sh
+set -eu
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /dev/shm /run /tmp /workspace
+mount -t devpts devpts /dev/pts -o mode=0620,ptmxmode=0666
+ln -sf pts/ptmx /dev/ptmx
+mount -t tmpfs tmpfs /dev/shm
+mount -t tmpfs tmpfs /run
+mount -t tmpfs tmpfs /tmp
+hostname boring-desktop
+ip link set lo up
+ip link set dev eth0 up 2>/dev/null || true
+
+# Keep guest DNS on the managed bridge. The kernel's ip=dhcp data is primary;
+# a DHCP default gateway is the only fallback, never a direct public resolver.
+rm -f /etc/resolv.conf
+if [ -s /proc/net/pnp ]; then
+  cat /proc/net/pnp > /etc/resolv.conf
+else
+  dns_gateway="$(ip -4 route show default | awk '$1 == "default" { print $3; exit }')"
+  if [ -n "$dns_gateway" ]; then
+    printf 'nameserver %s\n' "$dns_gateway" > /etc/resolv.conf
+  fi
+fi
+
+mkdir -p /run/nehemiah /root/.config/openbox /tmp/.X11-unix /run/dbus
+chmod 1777 /tmp/.X11-unix
+cat > /root/.config/openbox/autostart <<'EOF'
+xsetroot -solid '#10141f' &
+xterm -geometry 100x28+30+50 -title 'Boring Computer' &
+EOF
+
+dbus-uuidgen --ensure
+dbus-daemon --system --fork
+Xvfb :0 -screen 0 1280x800x24 -ac -nolisten tcp &
+export DISPLAY=:0
+i=0
+while [ ! -S /tmp/.X11-unix/X0 ] && [ "$i" -lt 100 ]; do
+  i=$((i + 1))
+  sleep 0.1
+done
+openbox &
+chromium_bin=/usr/lib/chromium/chromium
+[ -x "$chromium_bin" ] || chromium_bin=chromium
+"$chromium_bin" --no-sandbox --test-type --disable-dev-shm-usage --disable-gpu \
+  --no-first-run --disable-features=Translate --password-store=basic \
+  --user-data-dir=/root/.chromium --window-size=900,600 --window-position=16,20 \
+  about:blank >/var/log/chromium.log 2>&1 &
+x11vnc -display :0 -forever -shared -rfbport 5900 -nopw -noxdamage -threads -defer 10 &
+# Preserve the desktop contract: VNC is bridged from guest CID port 5900.
+socat VSOCK-LISTEN:5900,reuseaddr,fork TCP:127.0.0.1:5900 &
+
+start_guest_agent() {
+  while true; do
+    rm -f /run/bc-guest-agent.ready
+    /opt/boring/bin/bc-guest-agent
+    sleep 1
+  done
+}
+start_guest_agent &
+
+i=0
+while [ ! -e /run/bc-guest-agent.ready ] && [ "$i" -lt 100 ]; do
+  i=$((i + 1))
+  sleep 0.05
+done
+if [ -e /run/bc-guest-agent.ready ]; then
+  printf '%s\n' NEHEMIAH_READY > /dev/ttyS0
+else
+  printf '%s\n' 'guest agent failed to become ready' > /dev/ttyS0
+fi
+
+exec /bin/sh

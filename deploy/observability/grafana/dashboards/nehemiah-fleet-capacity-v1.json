@@ -1,0 +1,137 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (cloud_region, capacity) (nehemiah_host_cpu_cores)",
+          "legendFormat": "{{cloud_region}} {{capacity}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Fleet CPU cores",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "min": 0 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (cloud_region, capacity) (nehemiah_host_memory_bytes)",
+          "legendFormat": "{{cloud_region}} {{capacity}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Fleet memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "min": 0 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (cloud_region, capacity) (nehemiah_host_disk_bytes)",
+          "legendFormat": "{{cloud_region}} {{capacity}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Fleet disk",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (cloud_region, state) (nehemiah_host_machine_count)",
+          "legendFormat": "{{cloud_region}} {{state}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Machines by observed state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "max": 1 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 5,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max by (cloud_region, service_instance_id, state) (nehemiah_host_health)",
+          "legendFormat": "{{cloud_region}} {{service_instance_id}} {{state}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Host health",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["nehemiah", "fleet", "capacity", "versioned"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "utc",
+  "title": "Nehemiah / Fleet capacity / v1",
+  "uid": "nehemiah-fleet-capacity-v1",
+  "version": 1
+}

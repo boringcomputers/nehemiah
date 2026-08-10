@@ -46,18 +46,21 @@ invm 'test -e /dev/kvm' || die "/dev/kvm missing in the guest — nested virtual
 GUEST_ARCH="$(limactl shell "${VM}" -- uname -m)"
 log "  ok: guest is ${GUEST_ARCH} with /dev/kvm"
 
-# --- 3. cross-build nehemiahd for the guest arch on the Mac --------------------
-log "Cross-building nehemiahd for linux/${GUEST_ARCH}…"
+# --- 3. cross-build the host and guest agents for the nested VM ---------------
+log "Cross-building nehemiahd + guest agent for linux/${GUEST_ARCH}…"
 GOARCH="arm64"; [ "${GUEST_ARCH}" = "x86_64" ] && GOARCH="amd64"
 ( cd "${REPO_ROOT}/nehemiahd" && GOOS=linux GOARCH="${GOARCH}" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/nehemiahd-local . )
+( cd "${REPO_ROOT}/guest-agent" && GOOS=linux GOARCH="${GOARCH}" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/bc-guest-agent-local . )
 log "  built $(file -b /tmp/nehemiahd-local | cut -d, -f1-2)"
 
 # --- 4. ship infra scripts + nehemiahd binary into the guest ------------------
-log "Shipping infra scripts + nehemiahd into the guest…"
+log "Shipping infra scripts + nehemiahd/guest agent into the guest…"
 invm 'mkdir -p /root/infra /opt/boring/bin'
 tar czf - -C "${REPO_ROOT}/infra/latitude" . | limactl shell "${VM}" -- sudo tar xzf - -C /root/infra
 limactl shell "${VM}" -- sudo cp /dev/stdin /usr/local/bin/nehemiahd < /tmp/nehemiahd-local
+limactl shell "${VM}" -- sudo cp /dev/stdin /opt/boring/bin/bc-guest-agent < /tmp/bc-guest-agent-local
 invm 'chmod +x /usr/local/bin/nehemiahd'
+invm 'chmod +x /opt/boring/bin/bc-guest-agent'
 invm 'ln -sfn /usr/local/bin/nehemiahd /usr/local/bin/boringd'   # pre-rename name keeps working
 
 # --- 5. build the stack in the guest (arch-adapted scripts auto-detect) ------
@@ -73,11 +76,11 @@ else
 	invm 'bash /root/infra/build-desktop-rootfs.sh' || log "  desktop image build had issues (python shell still works)"
 fi
 log "guest networking (bridge + NAT + egress firewall)…"
-invm 'install -m0755 /root/infra/net-setup.sh /opt/boring/bin/net-setup.sh && bash /opt/boring/bin/net-setup.sh && cp /root/infra/boring-net.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable boring-net.service || true'
+invm 'install -m0755 /root/infra/net-setup.sh /opt/boring/bin/net-setup.sh && bash /opt/boring/bin/net-setup.sh && cp /root/infra/boring-net-local.service /etc/systemd/system/boring-net.service && systemctl daemon-reload && systemctl enable boring-net.service || true'
 
 # --- 6. nehemiahd config + service (bind 0.0.0.0 so Lima can forward it) -------
 log "installing nehemiahd service…"
-invm "cp /root/infra/nehemiahd.service /etc/systemd/system/nehemiahd.service"
+invm "cp /root/infra/nehemiahd-local.service /etc/systemd/system/nehemiahd.service"
 limactl shell "${VM}" -- sudo bash -c "install -d -m0755 /etc/boring && umask 077 && cat > /etc/boring/nehemiahd.env" <<EOF
 NEHEMIAH_ADDR=0.0.0.0:8080
 NEHEMIAH_ALLOW_PERSISTENT=1

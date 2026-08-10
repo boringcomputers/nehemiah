@@ -31,10 +31,18 @@ test-results
 
 # Go build output
 /nehemiahd/nehemiahd
+/gateway/gateway
+/guest-agent/guest-agent
 *.test
 
 # SDK build output
 packages/sdk/dist/
+apps/nehemiah/dist/
+packages/cli/dist/
+
+# Python bytecode (generated OpenAPI models)
+__pycache__/
+*.pyc
 
 # Claude runtime
 .claude/

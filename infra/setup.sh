@@ -44,14 +44,16 @@ esac
 [[ "${KVM}" == "yes" ]] || die "/dev/kvm missing — the box needs hardware/nested virtualization"
 log "  ok: Ubuntu ${ID:-?} ${ARCH} with /dev/kvm"
 
-# --- 1. ship infra scripts + nehemiahd source ----------------------------------
-log "Copying infra scripts + nehemiahd source…"
-"${SSH[@]}" 'mkdir -p /root/infra /opt/boring/src'
+# --- 1. ship infra scripts + host/guest agent source --------------------------
+log "Copying infra scripts + nehemiahd/guest-agent source…"
+"${SSH[@]}" 'mkdir -p /root/infra /opt/boring/bin /opt/boring/src /opt/boring/guest-agent-src'
 scp -q -o StrictHostKeyChecking=accept-new \
 	"${REPO_ROOT}"/infra/latitude/*.sh "${REPO_ROOT}"/infra/latitude/*.service \
 	"${REPO_ROOT}"/infra/latitude/Caddyfile "${TARGET}:/root/infra/"
 rsync -az --delete -e "ssh -o StrictHostKeyChecking=accept-new" \
 	--exclude '*_test.go' "${REPO_ROOT}/nehemiahd/" "${TARGET}:/opt/boring/src/"
+rsync -az --delete -e "ssh -o StrictHostKeyChecking=accept-new" \
+	--exclude '*_test.go' "${REPO_ROOT}/guest-agent/" "${TARGET}:/opt/boring/guest-agent-src/"
 
 # --- 2. install Go (matching go.mod) -----------------------------------------
 log "Ensuring Go ${GO_VERSION}…"
@@ -61,10 +63,12 @@ if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
   rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz && rm -f /tmp/go.tgz
 fi
 /usr/local/go/bin/go version
+cd /opt/boring/guest-agent-src
+CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o /opt/boring/bin/bc-guest-agent .
 EOF
 
 # --- 3. bootstrap: firecracker, jailer, kernel, base rootfs ------------------
-log "Bootstrap (firecracker + jailer + kernel + base rootfs)…"
+log "Bootstrap (firecracker + jailer + kernel + guest-agent rootfs)…"
 "${SSH[@]}" 'bash /root/infra/bootstrap.sh'
 
 # --- 4. build the guest images + snapshot ------------------------------------
@@ -84,7 +88,7 @@ log "Setting up guest networking…"
 "${SSH[@]}" bash -euo pipefail <<'EOF'
 install -m0755 /root/infra/net-setup.sh /opt/boring/bin/net-setup.sh
 bash /opt/boring/bin/net-setup.sh
-cp /root/infra/boring-net.service /etc/systemd/system/ 2>/dev/null || true
+cp /root/infra/boring-net-local.service /etc/systemd/system/boring-net.service 2>/dev/null || true
 systemctl daemon-reload && systemctl enable boring-net.service 2>/dev/null || true
 EOF
 
@@ -94,7 +98,7 @@ log "Building + installing nehemiahd…"
 cd /opt/boring/src
 CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o /usr/local/bin/nehemiahd .
 ln -sfn /usr/local/bin/nehemiahd /usr/local/bin/boringd   # pre-rename name keeps working
-cp /root/infra/nehemiahd.service /etc/systemd/system/nehemiahd.service
+cp /root/infra/nehemiahd-local.service /etc/systemd/system/nehemiahd.service
 EOF
 
 log "Writing config (secrets not printed)…"

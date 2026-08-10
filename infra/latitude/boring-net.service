@@ -1,12 +1,20 @@
 [Unit]
-Description=Nehemiah guest networking (bridge, dnsmasq, NAT, egress firewall)
+Description=Nehemiah guest networking (bridge, DHCP, NAT, egress firewall)
 After=network-online.target dnsmasq.service
 Wants=network-online.target
 Before=nehemiahd.service
+AssertPathExists=/etc/boring/managed-host
+AssertPathExists=/etc/boring/nehemiahd.env
 
 [Service]
 Type=oneshot
-ExecStart=/opt/boring/bin/net-setup.sh
+# The signed managed unit fails rather than silently falling back to prototype
+# defaults. The local unit remains intentionally permissive for development.
+EnvironmentFile=/etc/boring/nehemiahd.env
+ExecStartPre=/opt/boring/bin/managed-host-preflight.sh
+ExecStart=/usr/bin/env NEHEMIAH_MODE=1 /opt/boring/bin/net-setup.sh
+ExecStop=/usr/bin/env NEHEMIAH_MODE=1 /opt/boring/bin/net-setup.sh --fail-closed
+ExecStopPost=/usr/bin/env NEHEMIAH_MODE=1 /opt/boring/bin/net-setup.sh --fail-closed
 RemainAfterExit=yes
 
 [Install]

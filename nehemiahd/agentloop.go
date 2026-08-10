@@ -1,19 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 )
-
-// defaultAgentGoal is used when the client doesn't pass ?goal=. The desktop is a
-// minimal X session with a terminal on screen, so the default task is
-// terminal-driven (the most reliable thing to demo).
-const defaultAgentGoal = "Open the web browser, search for 'Firecracker microVM', open a result, and tell me one interesting thing you find."
 
 const agentSystemPrompt = `You are operating a Linux desktop by looking at screenshots and controlling the mouse and keyboard. This is a LIVE demo on a public website — real people are watching your screen right now.
 
@@ -34,17 +32,40 @@ func (s *Server) runAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	goal := strings.TrimSpace(r.URL.Query().Get("goal"))
-	if goal == "" {
-		goal = defaultAgentGoal
-	}
-	if len(goal) > 300 {
-		goal = goal[:300]
+	goal := ""
+	var guard *agentGuard
+	if s.cfg.NehemiahMode {
+		if r.URL.Query().Has("goal") {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "goal_query_not_allowed"})
+			return
+		}
+		var ok bool
+		guard, goal, ok = s.setupShellAgentGuard(w, r)
+		if !ok {
+			return
+		}
+		defer guard.close()
+	} else {
+		goal = strings.TrimSpace(r.URL.Query().Get("goal"))
+		if len(goal) > 300 { // legacy local query contract
+			goal = goal[:300]
+		}
 	}
 
-	// Dial the guest first so a non-desktop machine returns a clean HTTP error.
-	guest, err := s.mgr.DialVsock(id, VsockPort)
+	var guest net.Conn
+	var err error
+	if s.cfg.NehemiahMode {
+		guest, err = s.managedAgentVsock(guard.ctx, r, VsockPort)
+	} else {
+		// Local compatibility dials before upgrade so a non-desktop machine gets
+		// the historical HTTP error rather than a WebSocket event.
+		guest, err = s.mgr.DialVsock(id, VsockPort)
+	}
 	if err != nil {
+		if guard != nil {
+			guard.send("error", "the desktop channel is unavailable")
+			return
+		}
 		if err == ErrNotFound {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
 		} else {
@@ -56,20 +77,38 @@ func (s *Server) runAgent(w http.ResponseWriter, r *http.Request) {
 
 	cli, err := newRFBClient(guest)
 	if err != nil {
+		if guard != nil {
+			guard.send("error", "the desktop channel could not be initialized")
+			return
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "rfb: " + err.Error()})
 		return
 	}
 
-	guard := s.setupAgentGuard(w, r)
 	if guard == nil {
-		return
+		if goal == "" {
+			var ok bool
+			guard, goal, ok = s.setupShellAgentGuard(w, r)
+			if !ok {
+				return
+			}
+		} else {
+			guard = s.setupAgentGuard(w, r)
+			if guard == nil {
+				return
+			}
+		}
+		defer guard.close()
 	}
-	defer guard.close()
 
 	guard.send("say", "Taking a look at the screen…")
 	shot, err := cli.Screenshot()
 	if err != nil {
-		guard.send("error", "couldn't read the screen: "+err.Error())
+		if s.cfg.NehemiahMode {
+			guard.send("error", "the desktop screen is unavailable")
+		} else {
+			guard.send("error", "couldn't read the screen: "+err.Error())
+		}
 		return
 	}
 
@@ -86,10 +125,13 @@ func (s *Server) runAgent(w http.ResponseWriter, r *http.Request) {
 		if guard.stopped() {
 			return
 		}
-		// Keep the machine alive while we're working on it — a run must not die
-		// to the TTL reaper mid-action.
-		s.mgr.ExtendIfExpiring(id, 2*time.Minute)
-		resp, err := callAnthropicAPI(s.cfg, anthropicRequest{
+		// Local demos preserve their historical convenience extension. A managed
+		// lease is control-plane authority: an agent stream must never mint more
+		// runtime, bypass billing/idempotency, or outlive its absolute expiry.
+		if !s.cfg.NehemiahMode {
+			s.mgr.ExtendIfExpiring(id, 2*time.Minute)
+		}
+		resp, err := s.shellModel(guard.ctx, s.cfg, anthropicRequest{
 			Model:      s.cfg.AgentModel,
 			MaxTokens:  2048,
 			System:     agentSystemPrompt,
@@ -99,7 +141,14 @@ func (s *Server) runAgent(w http.ResponseWriter, r *http.Request) {
 			BetaHeader: "computer-use-2025-11-24",
 		})
 		if err != nil {
-			guard.send("error", err.Error())
+			if guard.stopped() || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			if s.cfg.NehemiahMode {
+				guard.send("error", "the agent model is temporarily unavailable")
+			} else {
+				guard.send("error", err.Error())
+			}
 			return
 		}
 		messages = append(messages, assistantMessage(resp.Content))
@@ -121,6 +170,12 @@ func (s *Server) runAgent(w http.ResponseWriter, r *http.Request) {
 				}
 				guard.send("action", describeAction(b.Input))
 				out, errText := executeAction(cli, b.Input)
+				if s.cfg.NehemiahMode && errText != "" {
+					// RFB decoder/socket details are a host boundary. Feeding them
+					// back through the model could reflect paths or provider text to
+					// the managed client on the next turn.
+					errText = "the desktop action could not be completed"
+				}
 				results = append(results, toolResult(b.ID, out, errText))
 			}
 		}

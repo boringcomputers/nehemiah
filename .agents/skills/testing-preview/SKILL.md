@@ -5,61 +5,97 @@ description: Test the preview proxy feature end-to-end. Use when verifying previ
 
 # Testing the Preview Feature
 
-## What It Does
-The preview proxy exposes a port running inside a guest Firecracker VM at a public URL. Two implementations exist:
-1. **Path-based** (`/v1/machines/{id}/web/{port}/{path...}`) — works over SSH tunnel and without wildcard DNS
-2. **Subdomain-based** (`<id>--<port>.<PreviewBase>`) — requires Caddy on-demand TLS + wildcard DNS
+## Security contract
 
-## Prerequisites
-- nehemiahd must be running with `NEHEMIAH_NET=1` (enables guest networking via tap/bridge/DHCP)
-- A test VM must be created with `net: true` (ensures DHCP lease is assigned)
-- An HTTP server must be running inside the guest on a known port
+Managed previews are served by the gateway, never by the dashboard or the host's
+legacy public preview route. Each preview is bound to all of:
 
-## How to Set Up a Test VM
+- the public machine ID;
+- the current lease ID;
+- one TCP port;
+- a short-lived `preview` capability;
+- a deterministic, lease-specific hostname below `NEHEMIAH_PREVIEW_BASE_DOMAIN`.
+
+The preview base must be on a different registrable domain from the dashboard
+and API. Capability tokens must not appear in query strings. The control plane
+returns a URL whose only credential is `#token=...`; fragments are not sent to
+the server. Gateway bootstrap JavaScript removes the fragment from browser
+history, exchanges it through `POST /v1/capability/exchange`, receives a
+host-only `HttpOnly; Secure; SameSite=Strict` cookie, and reloads the clean URL.
+
+The old unauthenticated `/v1/machines/{id}/web/{port}` flow is local/self-hosted
+compatibility only. A machine ID is an identifier, not a secret.
+
+## Automated verification
+
+Run the gateway's real HTTP/WebSocket proxy and security tests:
 
 ```bash
-# Build and run nehemiahd (with auth to test the auth bypass)
-cd nehemiahd && go build -o /tmp/nehemiahd .
-sudo NEHEMIAH_NET=1 NEHEMIAH_JAILER=0 NEHEMIAH_TOKEN=test-token /tmp/nehemiahd &
-
-# Create a VM with networking
-curl -s http://localhost:8080/v1/machines -X POST \
-  -H "Authorization: Bearer test-token" \
-  -d '{"template":"python","ttl_seconds":900,"net":true}'
-
-# Start an HTTP server inside the guest (via WebSocket TTY)
-python3 -c "
-import websocket, time
-ws = websocket.create_connection('ws://localhost:8080/v1/machines/MACHINE_ID/tty',
-    header=['Authorization: Bearer test-token'])
-time.sleep(0.5)
-ws.send(b'cd / && python3 -m http.server 8000 --bind 0.0.0.0 &\n')
-time.sleep(2)
-ws.close()
-"
+cd gateway
+go test -race -count=1 ./...
+go vet ./...
 ```
 
-## Key Test Cases
+The suite must cover fragment bootstrap and cookie exchange, exact host/lease/
+port binding, stale and expired leases, query-token rejection, path traversal,
+redirect rewriting, SSRF-resistant host routing, credential stripping, response
+header stripping, and WebSocket transport.
 
-The server above is started from `/` (`cd /`), so `http.server` serves the guest's
-root filesystem — that makes the sub-path test below resolve.
+Run the browser helper tests and production build with the pinned Chromium:
 
-1. **Preview without auth**: `curl http://localhost:8080/v1/machines/{id}/web/8000/` should return content (the `/` directory listing; no auth header needed)
-2. **Other routes still require auth**: `curl http://localhost:8080/v1/machines/{id}` should return 401
-3. **Sub-path routing**: `curl http://localhost:8080/v1/machines/{id}/web/8000/etc/` should show the guest's `/etc` directory listing (proves sub-paths are proxied through)
-4. **Via Vite proxy**: `curl http://localhost:5173/boring/v1/machines/{id}/web/8000/` should work
+```bash
+npx playwright install chromium
+npm test -w web
+npm run build -w web
+```
 
-## Architecture Notes
-- The web proxy route is intentionally unauthenticated — preview URLs are opened via `window.open` in new browser tabs which can't add Authorization headers
-- The machine ID acts as the access token (unguessable)
-- `machineIP()` resolves guest IP: first checks `driver.ip` (for forks), then falls back to DHCP lease file (`/var/lib/misc/dnsmasq.leases`)
-- Guest MAC is derived from machine ID via SHA1: `guestMAC(id) → 06:00:XX:XX:XX:XX`
+These tests ensure the dashboard treats the control-plane URL as opaque,
+accepts only the expected machine/port path on the isolated wildcard origin,
+requires a sole token fragment, and does not reconstruct query credentials.
 
-## Common Failure Modes
-- **"this computer isn't on the network"**: NEHEMIAH_NET not set, or machine created without net=true (for snapshot-eligible templates)
-- **"nothing is listening on port X"**: Server not started in guest, or bound to 127.0.0.1 instead of 0.0.0.0
-- **401 on preview URL**: The route might have been accidentally wrapped in `s.auth()` again
-- **Machine TTL expired**: Default TTL is short; use 900s for testing
+## Live managed-host verification
 
-## Devin Secrets Needed
-- None required for local testing (NEHEMIAH_TOKEN is set at runtime for test isolation)
+Prerequisites:
+
+- a disposable staging host with KVM, Firecracker jailer, cgroup v2 delegation,
+  WireGuard, `boring0`, dnsmasq, and managed-mode nehemiahd healthy;
+- wildcard DNS and TLS for a dedicated user-content registrable domain;
+- a control plane and gateway configured with that same preview base;
+- a ready machine with guest networking and an HTTP server listening on the
+  requested port.
+
+From an authenticated staging session:
+
+1. Request `POST /v1/machines/{id}/sessions` with
+   `{"capabilities":["preview"],"port":8000}`.
+2. Confirm the returned URL uses the expected isolated wildcard domain, exact
+   `/preview/{id}/8000/` path, no query parameters, and a single `#token=`
+   fragment. Confirm the response has `Cache-Control: no-store`.
+3. Open the URL in a clean browser context. Confirm the fragment disappears,
+   the exchange returns 204 with a host-only HttpOnly cookie, and the preview
+   loads after one reload.
+4. Verify nested paths, query strings, relative redirects, streaming responses,
+   and WebSocket upgrades reach the guest service without leaking the
+   capability or host credential.
+5. Verify no token, a query token, a wrong port, a sibling preview hostname, an
+   expired token, an old lease, and a stopped machine all fail closed.
+6. Serve hostile guest headers including `Set-Cookie`,
+   `Service-Worker-Allowed`, and `Clear-Site-Data`; confirm the gateway strips
+   them and that a preview cannot register a service worker outside its isolated
+   origin.
+
+Do not run live provisioning without explicit staging credentials and authority.
+Record the machine, lease, host, gateway version, and UTC timestamps for any live
+result, then destroy the disposable machine.
+
+## Common failure modes
+
+- **401 before exchange**: missing/invalid/expired capability or a query token.
+- **421 origin mismatch**: wildcard DNS/Host does not match the lease-derived
+  hostname in the capability.
+- **401 stale capability**: route lookup returned a different current lease.
+- **404 route not found**: machine stopped/expired or its host heartbeat is stale.
+- **502 route lookup/host failure**: gateway cannot reach the control plane or
+  the pinned private host address.
+- **Guest connection failure**: guest networking is unavailable or the service
+  is not listening on `0.0.0.0` inside the guest.

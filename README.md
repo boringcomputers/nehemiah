@@ -103,6 +103,8 @@ agents spin up and drive your computers as a tool:
 
 There's also an Effect-native TypeScript client,
 [`nehemiah-sdk`](packages/sdk) (`npm install nehemiah-sdk`).
+The companion [`nehemiah-cli`](packages/cli) provides `bc machines
+create|list|get|exec|tty|stop|fork` with structured JSON output.
 
 ## How it works
 
@@ -122,6 +124,7 @@ apps/web/          the site — SvelteKit
 nehemiahd/           the host daemon — Go, runs the microVMs
 packages/sdk/      nehemiah-sdk — Effect-native TypeScript client
 packages/mcp/      nehemiah-mcp — MCP server
+packages/cli/      bc — cloud/local command-line client
 infra/setup.sh     one-command host setup (any Ubuntu + KVM box)
 infra/latitude/    rootfs/kernel/image builds, networking, Caddy, Latitude helpers
 ```

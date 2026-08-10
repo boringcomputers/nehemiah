@@ -21,9 +21,26 @@ export interface AgentCallbacks {
 export function connectAgent(
 	machineId: string,
 	path: string,
+	goal: string,
 	callbacks: AgentCallbacks
 ): WebSocket {
 	const ws = new WebSocket(wsUrl(path));
+	const normalizedGoal = goal.trim();
+	const goalBytes = new TextEncoder().encode(normalizedGoal).byteLength;
+	const startFrame = JSON.stringify({ type: 'start', version: 1, goal: normalizedGoal });
+
+	ws.onopen = () => {
+		if (
+			goalBytes < 1 ||
+			goalBytes > 4096 ||
+			new TextEncoder().encode(startFrame).byteLength > 64 * 1024
+		) {
+			callbacks.onError?.('the agent goal must be between 1 and 4096 UTF-8 bytes');
+			ws.close(1008, 'invalid_start_frame');
+			return;
+		}
+		ws.send(startFrame);
+	};
 
 	ws.onmessage = (e) => {
 		let m: AgentMessage;

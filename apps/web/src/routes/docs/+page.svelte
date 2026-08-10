@@ -31,9 +31,8 @@
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">Base URL</h2>
 	<p class="mt-2 text-[13px] leading-relaxed text-ink-muted">
 		Run your own <span class="text-ink">nehemiahd</span> (see the
-		<a
-			href="https://github.com/boringcomputers/nehemiah"
-			class="text-accent hover:underline">repo</a
+		<a href="https://github.com/boringcomputers/nehemiah" class="text-accent hover:underline"
+			>repo</a
 		>) and point everything at your deployment. It listens on this by default:
 	</p>
 	<div class="mt-3">{@render code(API)}</div>
@@ -84,7 +83,7 @@ curl -s -X POST ${API}/v1/machines \\
 	<div class="mt-3 overflow-x-auto rounded-geist border border-line">
 		<table class="w-full border-collapse font-mono text-[12px]">
 			<tbody class="text-ink-muted">
-				{#each [['/v1/machines/{id}/tty', 'Serial console — bytes ⇄ the guest /dev/ttyS0'], ['/v1/machines/{id}/vnc', 'RFB/VNC framebuffer for desktop machines'], ['/v1/machines/{id}/agent?goal=…', 'Computer-use agent — drives the screen; streams narration JSON'], ['/v1/machines/{id}/shell-agent?goal=…', 'Terminal agent — writes + runs code; streams narration JSON']] as row (row[0])}
+				{#each [['/v1/machines/{id}/tty', 'Interactive guest-agent PTY — binary frames both ways'], ['/v1/machines/{id}/vnc', 'RFB/VNC framebuffer for desktop machines'], ['/v1/machines/{id}/agent', 'Local/self-hosted computer-use agent; managed cloud returns not_supported'], ['/v1/machines/{id}/shell-agent', 'Local/self-hosted terminal agent; managed cloud returns not_supported']] as row (row[0])}
 					<tr class="border-b border-line last:border-0">
 						<td class="px-3 py-2 align-top whitespace-nowrap text-ink">{row[0]}</td>
 						<td class="px-3 py-2 align-top text-ink-faint">{row[1]}</td>
@@ -96,8 +95,8 @@ curl -s -X POST ${API}/v1/machines \\
 
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">Previews</h2>
 	<p class="mt-2 text-[13px] leading-relaxed text-ink-muted">
-		Run a server inside a connected machine and open its port through nehemiahd — works locally (over
-		a tunnel) and on public deployments, no wildcard DNS:
+		Run a server inside a connected machine and open its port through nehemiahd — works locally
+		(over a tunnel) and on public deployments, no wildcard DNS:
 	</p>
 	<div class="mt-3">
 		{@render code(`${API}/v1/machines/<machine-id>/web/<port>/`)}
@@ -129,26 +128,10 @@ curl -s -X POST ${API}/v1/machines \\
 
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">Storage</h2>
 	<p class="mt-2 text-[13px] leading-relaxed text-ink-muted">
-		Persistent volumes (S3-backed) that outlive a machine. Create one, <code class="text-ink"
-			>save</code
-		>
-		a machine's /root into it, then restore it into a fresh machine by passing its id as
-		<code class="text-ink">volume</code> on launch. Volumes are addressed by an unguessable id and garbage-collected
-		on a TTL.
+		Managed volumes are disabled in the private beta until durable volume/revision-count quotas,
+		global transfer admission, and the machine attach/save path are complete. Machine disks are
+		ephemeral.
 	</p>
-	<div class="mt-3 overflow-x-auto rounded-geist border border-line">
-		<table class="w-full border-collapse font-mono text-[12px]">
-			<tbody class="text-ink-muted">
-				{#each [['POST', '/v1/volumes', 'Create a volume. Body: {ttl_seconds}'], ['GET', '/v1/volumes/{id}', 'Metadata + usage'], ['DELETE', '/v1/volumes/{id}', 'Delete a volume'], ['GET', '/v1/volumes/{id}/files', 'List files'], ['PUT', '/v1/volumes/{id}/file?path=…', 'Upload a file'], ['GET', '/v1/volumes/{id}/file?path=…', 'Download a file'], ['POST', '/v1/machines/{id}/save?volume=…', "Save a machine's /root into a volume"]] as row (row[1] + row[0])}
-					<tr class="border-b border-line last:border-0">
-						<td class="w-16 px-3 py-2 align-top text-accent">{row[0]}</td>
-						<td class="px-3 py-2 align-top whitespace-nowrap text-ink">{row[1]}</td>
-						<td class="px-3 py-2 align-top text-ink-faint">{row[2]}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-	</div>
 	<p class="mt-3 text-[13px] leading-relaxed text-ink-muted">
 		Attach on launch: <code class="text-ink">POST /v1/machines</code> with
 		<code class="text-ink">{'{"volume":"vol-…"}'}</code> restores the volume into /root first.
@@ -215,11 +198,12 @@ Effect.runPromise(
 }`)}
 	</div>
 	<p class="mt-3 text-[13px] leading-relaxed text-ink-muted">
-		Tools: <code class="text-ink">launch_computer</code>,
-		<code class="text-ink">run_task</code> (plain-English task → an agent writes + runs the code,
-		returns a live URL), <code class="text-ink">screenshot</code>,
-		<code class="text-ink">preview_url</code>, <code class="text-ink">fork_computer</code>,
-		<code class="text-ink">stop_computer</code>.
+		Cloud tools: <code class="text-ink">launch_computer</code>,
+		<code class="text-ink">run_command</code>, <code class="text-ink">preview_url</code>,
+		<code class="text-ink">fork_computer</code>, and <code class="text-ink">stop_computer</code>.
+		Host-local <code class="text-ink">run_task</code> and <code class="text-ink">screenshot</code>
+		are advertised only for local/self-hosted targets; managed callers can run their own agent inside
+		the guest.
 	</p>
 
 	<div class="mt-16 border-t border-line pt-6">

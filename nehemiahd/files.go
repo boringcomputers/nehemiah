@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,11 +11,10 @@ import (
 	"time"
 )
 
-// File transfer. The serial console can't move bulk data (the guest tty input
-// buffer overflows past a few KB), so instead we send a short command over the
-// console to spin up a one-shot node TCP helper in the guest, then stream the
-// file over the guest network (host->guest works via the bridge). node ships in
-// both the shell and desktop images. Requires a connected machine (needs an IP).
+// File transfer prefers the bounded vsock guest agent. Managed mode returns a
+// typed failure when that agent is unavailable. Only local/self-hosted mode may
+// fall back to a short serial command that starts a one-shot node TCP helper and
+// streams the file over the guest network.
 
 const fileSizeCap = 16 << 20 // 16 MiB
 
@@ -73,13 +73,41 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "file too big (16 MiB max)"})
 		return
 	}
-	console, ip, ok := s.guestFor(r.PathValue("id"))
+	name := sanitizeName(r.Header.Get("X-Filename"))
+	dest := "/root/" + name
+	id := r.PathValue("id")
+	release, ok := s.acquireGuestOperation(w, id)
+	if !ok {
+		return
+	}
+	defer release()
+	result, agentErr := s.guestAgent().Upload(r.Context(), id, dest, 0o600, r.ContentLength, r.Body)
+	if agentErr == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": result.Path, "bytes": result.Size, "transport": "vsock"})
+		return
+	}
+	if errors.Is(agentErr, ErrGuestFileTooLarge) {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "file too big (16 MiB max)"})
+		return
+	}
+	if s.cfg.NehemiahMode && !errors.Is(agentErr, ErrGuestAgentUnavailable) {
+		writeManagedGuestAgentFailed(w)
+		return
+	}
+	if !errors.Is(agentErr, ErrGuestAgentUnavailable) {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "guest agent upload failed: " + agentErr.Error()})
+		return
+	}
+	if s.cfg.NehemiahMode {
+		writeManagedGuestAgentUnavailable(w)
+		return
+	}
+
+	console, ip, ok := s.guestFor(id)
 	if !ok {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "file transfer needs a connected computer (turn internet on / use a desktop)"})
 		return
 	}
-	name := sanitizeName(r.Header.Get("X-Filename"))
-	dest := "/root/" + name
 	port := xferPort()
 	cmd := fmt.Sprintf(
 		`node -e 'require("net").createServer(c=>{c.pipe(require("fs").createWriteStream(process.argv[1])).on("finish",()=>process.exit(0)).on("error",()=>process.exit(1))}).listen(%d)' %s 2>/dev/null &`+"\n",
@@ -100,7 +128,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		tcp.CloseWrite() // EOF -> the receiver finishes writing and exits
 	}
 	io.Copy(io.Discard, conn) // wait for the receiver to close
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": dest, "bytes": n})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": dest, "bytes": n, "transport": "serial"})
 }
 
 // handleDownload streams a file out of the guest over the network.
@@ -110,7 +138,51 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "path required"})
 		return
 	}
-	console, ip, ok := s.guestFor(r.PathValue("id"))
+	id := r.PathValue("id")
+	release, ok := s.acquireGuestOperation(w, id)
+	if !ok {
+		return
+	}
+	defer release()
+	started := false
+	_, agentErr := s.guestAgent().DownloadTo(r.Context(), id, p, w, func(result guestDownloadResult) error {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", sanitizeName(path.Base(p))))
+		w.Header().Set("Content-Length", fmt.Sprint(result.Size))
+		w.Header().Set("X-Nehemiah-Transport", "vsock")
+		w.WriteHeader(http.StatusOK)
+		started = true
+		return nil
+	})
+	if agentErr == nil {
+		return
+	}
+	if started {
+		return
+	}
+	if errors.Is(agentErr, ErrGuestFileTooLarge) {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "file too big (16 MiB max)"})
+		return
+	}
+	var remoteErr *guestAgentRemoteError
+	if errors.As(agentErr, &remoteErr) && remoteErr.Code == "not_found" {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such file"})
+		return
+	}
+	if s.cfg.NehemiahMode && !errors.Is(agentErr, ErrGuestAgentUnavailable) {
+		writeManagedGuestAgentFailed(w)
+		return
+	}
+	if !errors.Is(agentErr, ErrGuestAgentUnavailable) {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "guest agent download failed: " + agentErr.Error()})
+		return
+	}
+	if s.cfg.NehemiahMode {
+		writeManagedGuestAgentUnavailable(w)
+		return
+	}
+
+	console, ip, ok := s.guestFor(id)
 	if !ok {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "file transfer needs a connected computer"})
 		return

@@ -1,0 +1,160 @@
+# Validated for otel/opentelemetry-collector-contrib:0.148.0.
+# The listener is private-network only; deployment policy must deny guest and
+# public ingress. Every application uses a unique Basic credential from the
+# root-owned htpasswd file and TLS is mandatory on both hops.
+extensions:
+  basicauth/ingest:
+    htpasswd:
+      file: /run/secrets/otel-ingest.htpasswd
+  basicauth/backend:
+    client_auth:
+      username_file: /run/secrets/otel-backend.username
+      password_file: /run/secrets/otel-backend.password
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    create_directory: true
+    directory_permissions: "0700"
+    fsync: true
+    compaction:
+      on_start: true
+      on_rebound: true
+      directory: /var/lib/otelcol/compaction
+      cleanup_on_start: true
+  health_check:
+    endpoint: 127.0.0.1:13133
+
+receivers:
+  otlp/private:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: basicauth/ingest
+        tls:
+          cert_file: /run/secrets/otel-ingest.crt
+          key_file: /run/secrets/otel-ingest.key
+          min_version: "1.2"
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  # Defense in depth. Applications already emit strict allowlists; delete
+  # common content-, credential-, network-, and command-bearing attributes if a
+  # future library adds them automatically.
+  attributes/redact:
+    actions:
+      - pattern: ^(?i:authorization|cookie|set-cookie|.*[._](?:authorization|cookie|api_key|token|password|secret))$
+        action: delete
+      - pattern: ^(?i:http\.request\.body|http\.response\.body|http\.request\.header\..*|http\.response\.header\..*)$
+        action: delete
+      - pattern: ^(?i:url\.(?:full|query)|http\.(?:url|target)|db\.(?:statement|query\.text))$
+        action: delete
+      - pattern: ^(?i:exception\.(?:message|stacktrace)|error\.message)$
+        action: delete
+      - pattern: ^(?i:process\.command.*|code\.function\.parameters)$
+        action: delete
+      - pattern: ^(?i:client\.(?:address|port)|server\.address|network\.(?:peer|local)\.address|source\.address|destination\.address)$
+        action: delete
+      - pattern: ^(?i:file\..*|terminal\..*|vnc\..*|agent\.(?:goal|prompt|response)|preview\.(?:url|host))$
+        action: delete
+  resource/redact:
+    attributes:
+      - pattern: ^(?i:host\.(?:ip|name)|container\.id|process\.command.*|cloud\.account\.id)$
+        action: delete
+  # Final signal allowlist: even an unknown future attribute is discarded.
+  # Resource identity is deployment-controlled; every remaining data-point or
+  # span key is a bounded enum/route defined by the application runtimes.
+  transform/allowlist:
+    error_mode: propagate
+    trace_statements:
+      - context: resource
+        statements:
+          - keep_keys(attributes, ["service.name", "service.version", "service.instance.id", "deployment.environment.name", "cloud.region"])
+      - context: span
+        statements:
+          - keep_keys(attributes, ["http.request.method", "http.route", "http.response.status_code", "job.name", "result", "operation", "error.type"])
+      - context: spanevent
+        statements:
+          - keep_keys(attributes, [])
+    metric_statements:
+      - context: resource
+        statements:
+          - keep_keys(attributes, ["service.name", "service.version", "service.instance.id", "deployment.environment.name", "cloud.region"])
+      - context: datapoint
+        statements:
+          - keep_keys(attributes, ["http.request.method", "http.route", "http.response.status_class", "job.name", "result", "operation", "capacity", "state", "capability", "direction"])
+  batch:
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+    timeout: 5s
+
+exporters:
+  # Authority only (host[:port]); forcing the scheme here prevents an
+  # accidentally configured plaintext backend.
+  otlphttp/backend:
+    endpoint: https://${env:OTEL_BACKEND_AUTHORITY}
+    auth:
+      authenticator: basicauth/backend
+    tls:
+      min_version: "1.2"
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 0s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 10000
+      storage: file_storage/queue
+  prometheus/private:
+    endpoint: 127.0.0.1:9464
+    enable_open_metrics: true
+    translation_strategy: UnderscoreEscapingWithSuffixes
+    metric_expiration: 5m
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  extensions:
+    [basicauth/ingest, basicauth/backend, file_storage/queue, health_check]
+  pipelines:
+    traces:
+      receivers: [otlp/private]
+      processors:
+        [
+          memory_limiter,
+          attributes/redact,
+          resource/redact,
+          transform/allowlist,
+          batch,
+        ]
+      exporters: [otlphttp/backend]
+    metrics:
+      receivers: [otlp/private]
+      processors:
+        [
+          memory_limiter,
+          attributes/redact,
+          resource/redact,
+          transform/allowlist,
+          batch,
+        ]
+      exporters: [otlphttp/backend, prometheus/private]
+
+  telemetry:
+    logs:
+      level: info
+      encoding: json
+      disable_stacktrace: true
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: 8888

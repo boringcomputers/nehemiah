@@ -1,0 +1,162 @@
+groups:
+  - name: nehemiah-slo
+    interval: 30s
+    rules:
+      - alert: NehemiahControlPlaneFastErrorBudgetBurn
+        expr: |
+          (
+            sum(rate(nehemiah_control_http_server_request_count_total{http_response_status_class="5xx"}[5m]))
+            / clamp_min(sum(rate(nehemiah_control_http_server_request_count_total[5m])), 1)
+          ) > 0.05
+          and
+          (
+            sum(rate(nehemiah_control_http_server_request_count_total{http_response_status_class="5xx"}[1h]))
+            / clamp_min(sum(rate(nehemiah_control_http_server_request_count_total[1h])), 1)
+          ) > 0.02
+        for: 5m
+        labels:
+          severity: page
+          owner: control-plane
+        annotations:
+          summary: Control-plane HTTP error budget is burning quickly
+          dashboard: nehemiah-customer-journeys-v1
+          runbook: docs/nehemiah/runbooks/debug-machine.md
+
+      - alert: NehemiahGatewayFastErrorBudgetBurn
+        expr: |
+          (
+            sum(rate(nehemiah_gateway_http_server_request_count_total{http_response_status_class="5xx"}[5m]))
+            / clamp_min(sum(rate(nehemiah_gateway_http_server_request_count_total[5m])), 1)
+          ) > 0.05
+          and
+          (
+            sum(rate(nehemiah_gateway_http_server_request_count_total{http_response_status_class="5xx"}[1h]))
+            / clamp_min(sum(rate(nehemiah_gateway_http_server_request_count_total[1h])), 1)
+          ) > 0.02
+        for: 5m
+        labels:
+          severity: page
+          owner: gateway
+        annotations:
+          summary: Gateway HTTP error budget is burning quickly
+          dashboard: nehemiah-gateway-v1
+          runbook: docs/nehemiah/runbooks/debug-machine.md
+
+      - alert: NehemiahTelemetryMissing
+        expr: |
+          absent_over_time(nehemiah_control_http_server_request_count_total[10m])
+          or absent_over_time(nehemiah_gateway_http_server_request_count_total[10m])
+          or absent_over_time(nehemiah_host_health[10m])
+        for: 5m
+        labels:
+          severity: page
+          owner: platform
+        annotations:
+          summary: A required Nehemiah service stopped reporting telemetry
+          dashboard: nehemiah-integrity-v1
+          runbook: deploy/observability/README.md
+
+  - name: nehemiah-fleet
+    interval: 30s
+    rules:
+      - alert: NehemiahHostUnhealthy
+        expr: max by (cloud_region, service_instance_id) (nehemiah_host_health{state="unhealthy"}) == 1
+        for: 2m
+        labels:
+          severity: page
+          owner: fleet
+        annotations:
+          summary: A managed host reports unhealthy
+          dashboard: nehemiah-fleet-capacity-v1
+          runbook: docs/nehemiah/runbooks/host-loss.md
+
+      - alert: NehemiahHostControlPlaneSyncFailing
+        expr: sum by (cloud_region, service_instance_id) (rate(nehemiah_host_control_plane_sync_count_total{result="failure"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: page
+          owner: fleet
+        annotations:
+          summary: A host cannot synchronize with the control plane
+          dashboard: nehemiah-fleet-capacity-v1
+          runbook: docs/nehemiah/runbooks/host-loss.md
+
+      - alert: NehemiahRegionCPUHeadroomLow
+        expr: sum by (cloud_region) (nehemiah_host_cpu_cores{capacity="available"}) < 2
+        for: 10m
+        labels:
+          severity: ticket
+          owner: fleet
+        annotations:
+          summary: Region has less than two allocatable vCPUs
+          dashboard: nehemiah-fleet-capacity-v1
+          runbook: docs/nehemiah/runbooks/capacity-exhaustion.md
+
+      - alert: NehemiahRegionMemoryHeadroomLow
+        expr: sum by (cloud_region) (nehemiah_host_memory_bytes{capacity="available"}) < 4294967296
+        for: 10m
+        labels:
+          severity: ticket
+          owner: fleet
+        annotations:
+          summary: Region has less than 4 GiB allocatable memory
+          dashboard: nehemiah-fleet-capacity-v1
+          runbook: docs/nehemiah/runbooks/capacity-exhaustion.md
+
+      - alert: NehemiahHostKVMUnavailable
+        expr: min by (cloud_region, service_instance_id) (nehemiah_host_kvm_available) < 1
+        for: 2m
+        labels:
+          severity: page
+          owner: fleet
+        annotations:
+          summary: KVM is unavailable on a reporting host
+          dashboard: nehemiah-fleet-capacity-v1
+          runbook: docs/nehemiah/runbooks/host-loss.md
+
+  - name: nehemiah-dependencies
+    interval: 30s
+    rules:
+      - alert: NehemiahDatabasePoolSaturated
+        expr: max(nehemiah_control_database_pool_waiting) > 0
+        for: 5m
+        labels:
+          severity: page
+          owner: control-plane
+        annotations:
+          summary: Control-plane requests are waiting for database connections
+          dashboard: nehemiah-integrity-v1
+          runbook: docs/nehemiah/runbooks/database-outage.md
+
+      - alert: NehemiahBackgroundJobFailing
+        expr: sum by (job_name) (rate(nehemiah_control_job_run_count_total{result="failure"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: ticket
+          owner: control-plane
+        annotations:
+          summary: A control-plane background job is failing
+          dashboard: nehemiah-machine-lifecycle-v1
+          runbook: docs/nehemiah/runbooks/debug-machine.md
+
+      - alert: NehemiahCollectorExportFailing
+        expr: sum(rate(otelcol_exporter_send_failed_spans_total[5m])) + sum(rate(otelcol_exporter_send_failed_metric_points_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: page
+          owner: platform
+        annotations:
+          summary: The collector is dropping telemetry bound for the backend
+          dashboard: nehemiah-integrity-v1
+          runbook: deploy/observability/README.md
+
+      - alert: NehemiahCollectorQueueNearCapacity
+        expr: max(otelcol_exporter_queue_size / clamp_min(otelcol_exporter_queue_capacity, 1)) > 0.8
+        for: 10m
+        labels:
+          severity: ticket
+          owner: platform
+        annotations:
+          summary: Collector persistent export queue is over 80 percent full
+          dashboard: nehemiah-integrity-v1
+          runbook: deploy/observability/README.md

@@ -1,0 +1,131 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (cloud_region, http_route, http_response_status_class) (rate(nehemiah_gateway_http_server_request_count_total[5m]))",
+          "legendFormat": "{{cloud_region}} {{http_route}} {{http_response_status_class}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Gateway request outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, cloud_region, http_route) (rate(nehemiah_gateway_http_server_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{cloud_region}} {{http_route}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Gateway p95 latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (cloud_region, capability) (nehemiah_gateway_stream_active)",
+          "legendFormat": "{{cloud_region}} {{capability}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Active capability streams",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "min": 0 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (cloud_region, capability, direction) (rate(nehemiah_gateway_stream_bytes_total[5m]))",
+          "legendFormat": "{{cloud_region}} {{capability}} {{direction}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Capability stream throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "nehemiah-prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1 },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 5,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (cloud_region) (rate(nehemiah_gateway_http_server_request_count_total{http_response_status_class=\"5xx\"}[5m])) / clamp_min(sum by (cloud_region) (rate(nehemiah_gateway_http_server_request_count_total[5m])), 1)",
+          "legendFormat": "{{cloud_region}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Gateway 5xx ratio",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["nehemiah", "gateway", "versioned"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "utc",
+  "title": "Nehemiah / Gateway / v1",
+  "uid": "nehemiah-gateway-v1",
+  "version": 1
+}

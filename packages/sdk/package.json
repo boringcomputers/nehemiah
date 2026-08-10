@@ -1,7 +1,7 @@
 {
 	"name": "nehemiah-sdk",
-	"version": "0.1.0",
-	"description": "Effect-native TypeScript client for Nehemiah — on-demand Firecracker microVMs you can hand to an AI.",
+	"version": "0.2.0-beta.0",
+	"description": "Effect-native client for Boring Computers Cloud, self-hosted Nehemiah, and local Firecracker microVMs.",
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
@@ -15,8 +15,12 @@
 		"sandbox",
 		"ai",
 		"agents",
-		"effect"
+		"effect",
+		"cloud"
 	],
+	"engines": {
+		"node": ">=20"
+	},
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -40,14 +44,13 @@
 		"prepublishOnly": "npm run build"
 	},
 	"dependencies": {
-		"effect": "^3.12.0",
-		"@effect/platform": "^0.96.0"
+		"effect": "^3.12.0"
 	},
 	"devDependencies": {
 		"typescript": "^6.0.3",
 		"@nehemiah/typescript-config": "*",
 		"@nehemiah/prettier-config": "*",
 		"@types/node": "^24",
-		"vitest": "^4.1.8"
+		"vitest": "^4.1.10"
 	}
 }

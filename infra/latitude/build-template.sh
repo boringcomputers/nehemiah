@@ -49,6 +49,7 @@ die()  { printf '\033[1;31m[template:error]\033[0m %s\n' "$*" >&2; exit 1; }
 # --------------------------------------------------------------------------
 WORK="$(mktemp -d /tmp/boring-template.XXXXXX)"
 SOCK="${WORK}/fc.sock"
+VSOCK="${WORK}/vsock"
 STDOUT_LOG="${WORK}/console.log"
 # Boot (and snapshot) from the template's OWN stable rootfs path so the path
 # baked into the snapshot still exists at restore time. nehemiahd restores by
@@ -132,13 +133,15 @@ wait_for_socket || die "firecracker API socket did not appear"
 # --------------------------------------------------------------------------
 # 3. Configure the VM via the API
 # --------------------------------------------------------------------------
-log "Configuring boot-source, drive, machine-config..."
+log "Configuring boot-source, drive, machine-config, and guest-agent vsock..."
 api PUT /boot-source \
   "{\"kernel_image_path\":\"${KERNEL}\",\"boot_args\":\"${BOOT_ARGS}\"}" >/dev/null
 api PUT /drives/rootfs \
   "{\"drive_id\":\"rootfs\",\"path_on_host\":\"${WORK_ROOTFS}\",\"is_root_device\":true,\"is_read_only\":false}" >/dev/null
 api PUT /machine-config \
   "{\"vcpu_count\":${VCPU_COUNT},\"mem_size_mib\":${MEM_MIB}}" >/dev/null
+api PUT /vsock \
+  "{\"guest_cid\":3,\"uds_path\":\"${VSOCK}\"}" >/dev/null
 
 log "Starting instance..."
 api PUT /actions '{"action_type":"InstanceStart"}' >/dev/null

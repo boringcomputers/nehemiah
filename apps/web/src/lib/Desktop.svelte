@@ -26,7 +26,10 @@
 	let disposed = false;
 
 	const MAX_ATTEMPTS = 10;
-	const timer = createCountdown(ttl, (r) => (remaining = r));
+	const timer = createCountdown(
+		() => ttl,
+		(r) => (remaining = r)
+	);
 
 	onMount(() => {
 		void launch();

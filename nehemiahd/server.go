@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -21,17 +22,30 @@ type Server struct {
 	volLimiter  *inferLimiter // per-IP volume-creation cap
 	agentBudget *dailyLimit   // global daily cap on agent runs
 	inferBudget *dailyLimit   // global daily cap on inference requests
+	guestOps    *guestOperationLimiter
+	hostProbe   hostProbe
+	telemetry   *hostTelemetry
+	shellModel  func(context.Context, Config, anthropicRequest) (*apiResp, error)
 }
 
 // NewServer builds the router with all routes from the contract.
 func NewServer(cfg Config, mgr *Manager) *Server {
-	s := &Server{cfg: cfg, mgr: mgr, mux: http.NewServeMux(), infer: newInferLimiter(cfg.InferenceRatePerMin), volLimiter: newInferLimiter(cfg.VolumeRatePerMin), agentBudget: newDailyLimit(cfg.DailyAgentMax), inferBudget: newDailyLimit(cfg.DailyInferMax)}
+	s := &Server{cfg: cfg, mgr: mgr, mux: http.NewServeMux(), infer: newInferLimiter(cfg.InferenceRatePerMin), volLimiter: newInferLimiter(cfg.VolumeRatePerMin), agentBudget: newDailyLimit(cfg.DailyAgentMax), inferBudget: newDailyLimit(cfg.DailyInferMax), guestOps: newGuestOperationLimiter(), hostProbe: systemHostProbe{}, telemetry: &hostTelemetry{}, shellModel: callAnthropicAPIContext}
+	mgr.CleanupTemplateTransfers()
 	if st, err := newStorage(cfg); err != nil {
-		log.Printf("storage disabled: %v", err)
+		if cfg.NehemiahMode {
+			logManagedHostEvent(managedHostEventStorageInitializationFailed, managedHostLogFields{Err: err})
+		} else {
+			log.Printf("storage disabled: %v", err)
+		}
 	} else if st != nil {
 		s.storage = st
 		s.startVolumeGC()
-		log.Printf("storage enabled (bucket=%s quota=%dMB)", cfg.S3Bucket, cfg.VolumeQuotaMB)
+		if cfg.NehemiahMode {
+			logManagedHostEvent(managedHostEventStorageEnabled, managedHostLogFields{Limit: int64(cfg.VolumeQuotaMB)})
+		} else {
+			log.Printf("storage enabled (bucket=%s quota=%dMB)", cfg.S3Bucket, cfg.VolumeQuotaMB)
+		}
 	}
 
 	// Open route: health check (never requires auth).
@@ -40,40 +54,54 @@ func NewServer(cfg Config, mgr *Manager) *Server {
 	// Caddy on-demand-TLS gate for preview subdomains (open, internal).
 	s.mux.HandleFunc("GET /internal/tls-check", s.handleTLSCheck)
 
-	// Inference gateway (OpenAI-compatible; keys are server-side, per-IP capped).
-	s.mux.Handle("POST /v1/chat/completions", s.auth(http.HandlerFunc(s.handleChatCompletions)))
-	s.mux.Handle("GET /v1/models", s.auth(http.HandlerFunc(s.handleModels)))
+	// Private host-agent contract. These routes have their own mandatory bearer
+	// token and never accept credentials from the query string.
+	s.mux.Handle("GET /internal/v1/host", s.internalAuth(http.HandlerFunc(s.handleInternalHost)))
+	s.mux.Handle("GET /internal/v1/machines", s.internalAuth(http.HandlerFunc(s.handleInternalListMachines)))
+	s.mux.Handle("POST /internal/v1/machines", s.internalAuth(http.HandlerFunc(s.handleInternalCreateMachine)))
+	s.mux.Handle("GET /internal/v1/machines/{id}", s.internalAuth(http.HandlerFunc(s.handleInternalGetMachine)))
+	s.mux.Handle("DELETE /internal/v1/machines/{id}", s.internalAuth(http.HandlerFunc(s.handleInternalDeleteMachine)))
+	s.mux.Handle("POST /internal/v1/machines/{id}/extend", s.internalAuth(http.HandlerFunc(s.handleInternalExtendMachine)))
+	s.mux.Handle("POST /internal/v1/machines/{id}/fork", s.internalAuth(http.HandlerFunc(s.handleInternalForkMachine)))
+	s.mux.Handle("POST /internal/v1/machines/{id}/exec", s.internalAuth(http.HandlerFunc(s.handleInternalExecMachine)))
+	s.mux.Handle("POST /internal/v1/machines/{id}/template-exports", s.internalAuth(http.HandlerFunc(s.handleInternalExportTemplate)))
+	s.mux.Handle("POST /internal/v1/machines/{id}/template-exports/{export}/upload", s.internalAuth(http.HandlerFunc(s.handleInternalUploadTemplate)))
+	s.mux.Handle("DELETE /internal/v1/machines/{id}/template-exports/{export}", s.internalAuth(http.HandlerFunc(s.handleInternalDiscardTemplateExport)))
+	s.mux.Handle("POST /internal/v1/templates/{name}/activate", s.internalAuth(http.HandlerFunc(s.handleInternalActivateTemplate)))
+	s.mux.Handle("GET /internal/v1/events", s.internalAuth(http.HandlerFunc(s.handleInternalEvents)))
 
-	// Authenticated /v1 routes.
-	s.mux.Handle("POST /v1/machines", s.auth(http.HandlerFunc(s.handleCreate)))
-	s.mux.Handle("GET /v1/machines", s.auth(http.HandlerFunc(s.handleList)))
-	s.mux.Handle("GET /v1/machines/{id}", s.auth(http.HandlerFunc(s.handleGet)))
-	s.mux.Handle("DELETE /v1/machines/{id}", s.auth(http.HandlerFunc(s.handleDelete)))
-	s.mux.Handle("POST /v1/machines/{id}/branch", s.auth(http.HandlerFunc(s.handleBranch)))
-	s.mux.Handle("POST /v1/machines/{id}/extend", s.auth(http.HandlerFunc(s.handleExtend)))
+	// The legacy self-hosted API can authorize local intent. Managed hosts do
+	// not expose it: only the control-plane internal API may create, mutate, or
+	// enumerate fleet VMs. The gateway token is limited to the data plane below.
+	if !cfg.NehemiahMode {
+		s.mux.Handle("POST /v1/chat/completions", s.auth(http.HandlerFunc(s.handleChatCompletions)))
+		s.mux.Handle("GET /v1/models", s.auth(http.HandlerFunc(s.handleModels)))
+		s.mux.Handle("POST /v1/machines", s.auth(http.HandlerFunc(s.handleCreate)))
+		s.mux.Handle("GET /v1/machines", s.auth(http.HandlerFunc(s.handleList)))
+		s.mux.Handle("GET /v1/machines/{id}", s.auth(http.HandlerFunc(s.handleGet)))
+		s.mux.Handle("DELETE /v1/machines/{id}", s.auth(http.HandlerFunc(s.handleDelete)))
+		s.mux.Handle("POST /v1/machines/{id}/branch", s.auth(http.HandlerFunc(s.handleBranch)))
+		s.mux.Handle("POST /v1/machines/{id}/extend", s.auth(http.HandlerFunc(s.handleExtend)))
+		s.mux.Handle("POST /v1/machines/{id}/publish", s.auth(http.HandlerFunc(s.handlePublish)))
+		s.mux.Handle("GET /v1/templates", s.auth(http.HandlerFunc(s.handleListTemplates)))
+		s.mux.Handle("DELETE /v1/templates/{name}", s.auth(http.HandlerFunc(s.handleDeleteTemplate)))
+		s.mux.Handle("POST /v1/machines/{id}/exec", s.auth(http.HandlerFunc(s.handleExec)))
+	}
 
-	// Snapshot-to-template: freeze a running machine as a named template; new
-	// machines boot from it in milliseconds ({"template": "<name>"}).
-	s.mux.Handle("POST /v1/machines/{id}/publish", s.auth(http.HandlerFunc(s.handlePublish)))
-	s.mux.Handle("GET /v1/templates", s.auth(http.HandlerFunc(s.handleListTemplates)))
-	s.mux.Handle("DELETE /v1/templates/{name}", s.auth(http.HandlerFunc(s.handleDeleteTemplate)))
+	// Managed file transfer is guest-agent/vsock-only. Local/self-hosted mode may
+	// use the legacy serial-launched network helper when the guest agent is absent.
+	s.mux.Handle("POST /v1/machines/{id}/upload", s.auth(s.managedMachineLease(http.HandlerFunc(s.handleUpload))))
+	s.mux.Handle("GET /v1/machines/{id}/download", s.auth(s.managedMachineLease(http.HandlerFunc(s.handleDownload))))
 
-	// Deterministic command execution (no TTY, no LLM): run one command, get
-	// {output, exit_code} back as JSON.
-	s.mux.Handle("POST /v1/machines/{id}/exec", s.auth(http.HandlerFunc(s.handleExec)))
-
-	// File transfer over the guest serial console.
-	s.mux.Handle("POST /v1/machines/{id}/upload", s.auth(http.HandlerFunc(s.handleUpload)))
-	s.mux.Handle("GET /v1/machines/{id}/download", s.auth(http.HandlerFunc(s.handleDownload)))
-
-	// Path-based preview: reverse-proxy a guest port (works over the tunnel /
-	// without wildcard DNS). Any method, sub-paths, and WS upgrades.
-	// No auth: previews are opened in new browser tabs (window.open) which can't
-	// add Authorization headers. The machine ID itself is the access token.
-	s.mux.HandleFunc("/v1/machines/{id}/web/{port}/{path...}", s.handleWebProxy)
+	// Path-based preview target used by the trusted gateway. In managed mode the
+	// gateway supplies the host-specific data-plane credential and current lease;
+	// the public browser never talks to this route directly. Local/self-hosted
+	// mode retains bearer auth for compatibility. Any method, sub-path, and WS
+	// upgrade can be proxied after those checks.
+	s.mux.Handle("/v1/machines/{id}/web/{port}/{path...}", s.auth(s.managedMachineLease(http.HandlerFunc(s.handleWebProxy))))
 
 	// Persistent volumes (S3-backed). Registered only when storage is configured.
-	if s.storage != nil {
+	if s.storage != nil && !cfg.NehemiahMode {
 		s.mux.Handle("POST /v1/volumes", s.auth(http.HandlerFunc(s.handleCreateVolume)))
 		s.mux.Handle("GET /v1/volumes/{id}", s.auth(http.HandlerFunc(s.handleGetVolume)))
 		s.mux.Handle("DELETE /v1/volumes/{id}", s.auth(http.HandlerFunc(s.handleDeleteVolume)))
@@ -82,31 +110,59 @@ func NewServer(cfg Config, mgr *Manager) *Server {
 		s.mux.Handle("GET /v1/volumes/{id}/file", s.auth(http.HandlerFunc(s.handleGetVolumeFile)))
 		s.mux.Handle("DELETE /v1/volumes/{id}/file", s.auth(http.HandlerFunc(s.handleDeleteVolumeFile)))
 		// Save a machine's /root into a volume (attach is via POST /v1/machines {volume}).
-		s.mux.Handle("POST /v1/machines/{id}/save", s.auth(http.HandlerFunc(s.handleSaveVolume)))
+		s.mux.Handle("POST /v1/machines/{id}/save", s.auth(s.managedMachineLease(http.HandlerFunc(s.handleSaveVolume))))
 	}
 
-	// WebSocket TTY + VNC. Auth is handled inside (accepts ?token= too).
-	s.mux.HandleFunc("GET /v1/machines/{id}/tty", s.handleTTY)
-	s.mux.HandleFunc("GET /v1/machines/{id}/vnc", s.handleVNC)
+	// WebSocket TTY + VNC. Managed requests require the per-host gateway token
+	// and current lease; local mode retains its legacy bearer compatibility.
+	s.mux.Handle("GET /v1/machines/{id}/tty", s.auth(s.managedMachineLease(http.HandlerFunc(s.handleTTY))))
+	s.mux.Handle("GET /v1/machines/{id}/vnc", s.auth(s.managedMachineLease(http.HandlerFunc(s.handleVNC))))
 
-	// Debug/agent: capture a PNG screenshot of a desktop machine.
-	s.mux.Handle("GET /v1/machines/{id}/screenshot", s.auth(http.HandlerFunc(s.handleScreenshot)))
+	if !cfg.NehemiahMode {
+		// Screenshot is not currently a gateway capability.
+		s.mux.Handle("GET /v1/machines/{id}/screenshot", s.auth(http.HandlerFunc(s.handleScreenshot)))
+	}
 
-	// Computer-use agent: drive a desktop machine toward a goal, streaming
-	// narration over a WebSocket.
-	s.mux.HandleFunc("GET /v1/machines/{id}/agent", s.handleAgent)
+	// Local/self-hosted computer-use agent. The managed route stays authenticated
+	// as defense in depth, but receives no public capability or provider credential.
+	s.mux.Handle("GET /v1/machines/{id}/agent", s.auth(s.managedMachineLease(http.HandlerFunc(s.handleAgent))))
 
-	// Terminal agent: drive a shell machine toward a goal by typing commands
-	// into its serial console, streaming narration over a WebSocket.
-	s.mux.HandleFunc("GET /v1/machines/{id}/shell-agent", s.runShellAgent)
+	// Local/self-hosted terminal agent over serial. The managed route stays
+	// authenticated but receives no public capability or provider credential.
+	s.mux.Handle("GET /v1/machines/{id}/shell-agent", s.auth(s.managedMachineLease(http.HandlerFunc(s.runShellAgent))))
 
 	return s
 }
 
+func (s *Server) acquireGuestOperation(w http.ResponseWriter, machineID string) (func(), bool) {
+	release, ok := s.guestOps.tryAcquire(machineID)
+	if ok {
+		return release, true
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(guestOperationRetryAfterSeconds))
+	writeJSON(w, http.StatusTooManyRequests, map[string]any{
+		"error":               "guest_operation_capacity_reached",
+		"retry_after_seconds": guestOperationRetryAfterSeconds,
+	})
+	return nil, false
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.telemetry.serveHTTP(w, r, s.serveHTTP)
+}
+
+// SetTelemetry attaches the process-owned runtime after the listener and
+// exporters have initialized. Tests and local mode retain the no-op default.
+func (s *Server) SetTelemetry(telemetry *hostTelemetry) {
+	if telemetry != nil {
+		s.telemetry = telemetry
+	}
+}
+
+func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// Preview hosts (<id>--<port>.<base>) bypass the API entirely and reverse-
 	// proxy straight to the guest's port.
-	if id, port, ok := s.previewTarget(r.Host); ok {
+	if id, port, ok := s.previewTarget(r.Host); !s.cfg.NehemiahMode && ok {
 		s.handlePreview(w, r, id, port)
 		return
 	}
@@ -137,8 +193,38 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
+// managedMachineLease binds every data-plane operation to the current machine
+// lease. Local/self-hosted mode keeps its existing token-only API contract.
+func (s *Server) managedMachineLease(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.NehemiahMode && !s.requireMachineLease(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requireMachineLease(w http.ResponseWriter, r *http.Request) bool {
+	provided := r.Header.Get("X-Nehemiah-Lease-ID")
+	if provided == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "lease_required"})
+		return false
+	}
+	machine, ok := s.mgr.InternalGet(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(machine.LeaseID)) != 1 {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "lease_mismatch"})
+		return false
+	}
+	return true
+}
+
 // authorized returns true if the request carries the correct token, or if no
-// token is configured. Accepts both the Authorization header and ?token=.
+// token is configured. Managed hosts reject URL credentials because they leak
+// into access logs and browser history; local mode retains legacy compatibility.
 func (s *Server) authorized(r *http.Request) bool {
 	if s.cfg.Token == "" {
 		return true
@@ -151,7 +237,8 @@ func (s *Server) authorized(r *http.Request) bool {
 			}
 		}
 	}
-	if q := r.URL.Query().Get("token"); q != "" {
+	if !s.cfg.NehemiahMode {
+		q := r.URL.Query().Get("token")
 		if subtle.ConstantTimeCompare([]byte(q), []byte(s.cfg.Token)) == 1 {
 			return true
 		}
@@ -192,21 +279,38 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	m, err := s.mgr.Create(req.Template, req.TTLSeconds, req.Net, req.Persistent, clientIP(r, s.cfg.TrustProxy))
 	if err != nil {
+		if errors.Is(err, ErrHostDraining) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "host_draining"})
+			return
+		}
+		if errors.Is(err, ErrHostUnhealthy) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "host_unhealthy"})
+			return
+		}
 		if errors.Is(err, ErrTooManyMachines) || errors.Is(err, ErrRateLimited) {
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": err.Error()})
 			return
 		}
-		log.Printf("create failed: %v", err)
+		if s.cfg.NehemiahMode {
+			logManagedHostEvent(managedHostEventCreateFailed, managedHostLogFields{Err: err})
+		} else {
+			log.Printf("create failed: %v", err)
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 	// Restore a volume's snapshot into /root before the user connects (best-effort).
 	if req.Volume != "" && s.storage != nil {
 		if err := s.attachVolume(m.ID, req.Volume); err != nil {
-			log.Printf("machine %s: attach volume %s failed: %v", m.ID, req.Volume, err)
+			if s.cfg.NehemiahMode {
+				logManagedHostEvent(managedHostEventVolumeAttachFailed, managedHostLogFields{MachineID: m.ID, Err: err})
+			} else {
+				log.Printf("machine %s: attach volume %s failed: %v", m.ID, req.Volume, err)
+			}
 		}
 	}
-	writeJSON(w, http.StatusCreated, m.View())
+	view, _ := s.mgr.Get(m.ID)
+	writeJSON(w, http.StatusCreated, view)
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +354,11 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ErrSnapshotUnavailable):
 			writeJSON(w, http.StatusNotImplemented, map[string]any{"error": err.Error()})
 		default:
-			log.Printf("publish failed: %v", err)
+			if s.cfg.NehemiahMode {
+				logManagedHostEvent(managedHostEventPublishFailed, managedHostLogFields{Err: err})
+			} else {
+				log.Printf("publish failed: %v", err)
+			}
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		}
 		return
@@ -333,18 +441,23 @@ func (s *Server) handleBranch(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ErrSnapshotUnavailable):
 			writeJSON(w, http.StatusNotImplemented, map[string]any{"error": err.Error()})
 		default:
-			log.Printf("branch failed: %v", err)
+			if s.cfg.NehemiahMode {
+				logManagedHostEvent(managedHostEventBranchFailed, managedHostLogFields{Err: err})
+			} else {
+				log.Printf("branch failed: %v", err)
+			}
 			writeJSON(w, http.StatusNotImplemented, map[string]any{"error": err.Error()})
 		}
 		return
 	}
 	if count <= 1 {
-		writeJSON(w, http.StatusCreated, forks[0].View())
+		view, _ := s.mgr.Get(forks[0].ID)
+		writeJSON(w, http.StatusCreated, view)
 		return
 	}
 	views := make([]machineView, len(forks))
 	for i, m := range forks {
-		views[i] = m.View()
+		views[i], _ = s.mgr.Get(m.ID)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"machines": views, "requested": count})
 }
@@ -354,6 +467,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("writeJSON: encode failed: %v", err)
+		logManagedHostEvent(managedHostEventResponseEncodeFailed, managedHostLogFields{Err: err})
 	}
 }

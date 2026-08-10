@@ -11,7 +11,11 @@ export interface HealthServices {
 }
 
 export const healthz: Handler<HealthServices> = ({ services }) =>
-	json({ ok: true, service: 'nehemiah-control-plane', started_at: services.startedAt.toISOString() });
+	json({
+		ok: true,
+		service: 'nehemiah-control-plane',
+		started_at: services.startedAt.toISOString()
+	});
 
 export const readyz: Handler<HealthServices> = async ({ services, requestId }) => {
 	try {

@@ -1,0 +1,55 @@
+{
+	"name": "nehemiah-cli",
+	"version": "0.2.0-beta.0",
+	"description": "Command-line client for Boring Computers Cloud and self-hosted Nehemiah",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/boringcomputers/nehemiah.git",
+		"directory": "packages/cli"
+	},
+	"homepage": "https://github.com/boringcomputers/nehemiah#readme",
+	"keywords": [
+		"boring-computers",
+		"nehemiah",
+		"cloud",
+		"microvm",
+		"cli"
+	],
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"bin": {
+		"bc": "./dist/index.js",
+		"nehemiah": "./dist/index.js"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"prettier": "@nehemiah/prettier-config",
+	"scripts": {
+		"build": "tsc",
+		"check": "tsc --noEmit",
+		"test": "vitest run",
+		"lint": "prettier --check .",
+		"format": "prettier --write .",
+		"prepublishOnly": "npm run build"
+	},
+	"dependencies": {
+		"@napi-rs/keyring": "1.3.0",
+		"effect": "^3.12.0",
+		"nehemiah-sdk": "^0.2.0-beta.0"
+	},
+	"devDependencies": {
+		"@nehemiah/prettier-config": "*",
+		"@nehemiah/typescript-config": "*",
+		"@types/node": "^24",
+		"esbuild": "^0.28.1",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
+	}
+}

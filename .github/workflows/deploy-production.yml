@@ -1,0 +1,293 @@
+name: Promote staging to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_run_id:
+        description: Successful Deploy staging workflow run ID
+        required: true
+        type: string
+      reviewed_main_sha:
+        description: Exact protected-main commit reviewed for production
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nehemiah-production
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      attestations: read
+    steps:
+      - name: Require an exact manual protected-main invocation
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_main_sha }}
+          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_EVENT" = workflow_dispatch
+          test "$SOURCE_REF" = refs/heads/main
+          [[ "$REVIEWED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STAGING_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          test "$SOURCE_SHA" = "$REVIEWED_SHA"
+
+      - name: Check out the exact reviewed protected-main source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind checked-out policy code to the reviewed SHA
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_main_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
+
+      - name: Fetch bounded staging run and protected-main evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_SHA: ${{ inputs.reviewed_main_sha }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/staging-promotion-evidence"
+          install -d -m 0700 "$evidence_dir"
+          api_get() {
+            curl --proto '=https' --tlsv1.2 \
+              --fail --silent --show-error \
+              --max-time 30 --max-filesize 131072 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              --output "$2" "$1"
+          }
+          api_get \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${STAGING_RUN_ID}" \
+            "$evidence_dir/run.json"
+          api_get \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/branches/main" \
+            "$evidence_dir/branch.json"
+          api_get \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${STAGING_RUN_ID}/artifacts?per_page=100" \
+            "$evidence_dir/artifacts.json"
+
+      - name: Authorize the exact completed staging run
+        id: staging_run
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_RUN_ID: ${{ inputs.staging_run_id }}
+          EXPECTED_HEAD_SHA: ${{ inputs.reviewed_main_sha }}
+        run: >-
+          node scripts/deploy/promotion.mjs inspect-run
+          "$RUNNER_TEMP/staging-promotion-evidence/run.json"
+          "$RUNNER_TEMP/staging-promotion-evidence/branch.json"
+          "$RUNNER_TEMP/staging-promotion-evidence/artifacts.json"
+
+      - name: Download only the authorized staging promotion artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ steps.staging_run.outputs.artifact_id }}
+          path: ${{ runner.temp }}/staging-promotion
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.staging_run_id }}
+
+      - name: Verify staging promotion provenance before parsing it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_RECORD: ${{ runner.temp }}/staging-promotion/promotion.json
+          REVIEWED_SHA: ${{ inputs.reviewed_main_sha }}
+        run: |
+          set -euo pipefail
+          test -f "$PROMOTION_RECORD" && test ! -L "$PROMOTION_RECORD"
+          bytes="$(stat -c '%s' "$PROMOTION_RECORD")"
+          test "$bytes" -ge 1 && test "$bytes" -le 4096
+          gh attestation verify "$PROMOTION_RECORD" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy-staging.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$REVIEWED_SHA" \
+            --deny-self-hosted-runners >/dev/null
+
+      - name: Validate the exact promotion record and schema epoch
+        id: promotion
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_RUN_ID: ${{ inputs.staging_run_id }}
+          EXPECTED_HEAD_SHA: ${{ inputs.reviewed_main_sha }}
+          EXPECTED_SCHEMA_EPOCH: 0035_project_allocation_bounds.sql
+        run: >-
+          node scripts/deploy/promotion.mjs validate
+          "$RUNNER_TEMP/staging-promotion"
+          "$RUNNER_TEMP/staging-promotion-evidence/run.json"
+          "$RUNNER_TEMP/staging-promotion-evidence/branch.json"
+          "$RUNNER_TEMP/staging-promotion-evidence/artifacts.json"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install the exact reviewed dependencies
+        run: npm ci
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Install checksum-verified Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Verify promoted image signatures and provenance before cutover
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-control@${{ steps.promotion.outputs.control_digest }}
+          GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-gateway@${{ steps.promotion.outputs.gateway_digest }}
+          REVIEWED_SHA: ${{ steps.promotion.outputs.reviewed_sha }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/deploy-staging.yml@refs/heads/main"
+          for image in "$CONTROL_IMAGE" "$GATEWAY_IMAGE"; do
+            cosign verify \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$image" >/dev/null
+            gh attestation verify "oci://$image" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy-staging.yml" \
+              --source-ref refs/heads/main \
+              --source-digest "$REVIEWED_SHA" \
+              --deny-self-hosted-runners >/dev/null
+          done
+
+      - name: Drain and fence every prior production schema/protocol revision
+        id: cutover
+        env:
+          DEPLOY_URL: ${{ secrets.PROD_DEPLOY_WEBHOOK }}
+          DEPLOY_TOKEN: ${{ secrets.PROD_DEPLOY_TOKEN }}
+          CONTROL_DIGEST: ${{ steps.promotion.outputs.control_digest }}
+          GATEWAY_DIGEST: ${{ steps.promotion.outputs.gateway_digest }}
+          SCHEMA_EPOCH: ${{ steps.promotion.outputs.schema_epoch }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_URL" && test -n "$DEPLOY_TOKEN"
+          case "$DEPLOY_URL" in https://*) ;; *) echo "DEPLOY_URL must use HTTPS" >&2; exit 1 ;; esac
+          [[ "$CONTROL_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid control digest" >&2; exit 1; }
+          [[ "$GATEWAY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid gateway digest" >&2; exit 1; }
+          response="$RUNNER_TEMP/nehemiah-production-cutover-prepare.json"
+          curl --fail-with-body --silent --show-error \
+            --max-time 120 \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data "{\"action\":\"prepare_maintenance_cutover\",\"schema_epoch\":\"${SCHEMA_EPOCH}\",\"control_digest\":\"${CONTROL_DIGEST}\",\"gateway_digest\":\"${GATEWAY_DIGEST}\"}" \
+            --output "$response" \
+            "$DEPLOY_URL"
+          cutover_id="$(node scripts/deploy/cutover-response.mjs prepare "$response")"
+          echo "cutover_id=$cutover_id" >>"$GITHUB_OUTPUT"
+
+      - name: Run the one-shot production migration from the promoted control image
+        env:
+          CONTROL_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-control@${{ steps.promotion.outputs.control_digest }}
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$DATABASE_URL" && test -n "$MIGRATION_DATABASE_URL"
+          test "$DATABASE_URL" != "$MIGRATION_DATABASE_URL"
+          docker pull "$CONTROL_IMAGE" >/dev/null
+          docker run --rm \
+            --entrypoint node \
+            -e NODE_ENV=production \
+            -e DATABASE_URL \
+            -e MIGRATION_DATABASE_URL \
+            "$CONTROL_IMAGE" dist/db/migrate.js
+
+      - name: Request the exact digest-pinned production deployment
+        id: deploy_request
+        env:
+          DEPLOY_URL: ${{ secrets.PROD_DEPLOY_WEBHOOK }}
+          DEPLOY_TOKEN: ${{ secrets.PROD_DEPLOY_TOKEN }}
+          CONTROL_DIGEST: ${{ steps.promotion.outputs.control_digest }}
+          GATEWAY_DIGEST: ${{ steps.promotion.outputs.gateway_digest }}
+          SCHEMA_EPOCH: ${{ steps.promotion.outputs.schema_epoch }}
+          CUTOVER_ID: ${{ steps.cutover.outputs.cutover_id }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_URL" && test -n "$DEPLOY_TOKEN"
+          case "$DEPLOY_URL" in https://*) ;; *) echo "DEPLOY_URL must use HTTPS" >&2; exit 1 ;; esac
+          [[ "$CONTROL_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid control digest" >&2; exit 1; }
+          [[ "$GATEWAY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid gateway digest" >&2; exit 1; }
+          [[ "$CUTOVER_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || { echo "invalid cutover id" >&2; exit 1; }
+          response="$RUNNER_TEMP/nehemiah-production-cutover-commit.json"
+          curl --fail-with-body --silent --show-error \
+            --max-time 120 \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data "{\"action\":\"commit_maintenance_cutover\",\"cutover_id\":\"${CUTOVER_ID}\",\"schema_epoch\":\"${SCHEMA_EPOCH}\",\"control_digest\":\"${CONTROL_DIGEST}\",\"gateway_digest\":\"${GATEWAY_DIGEST}\"}" \
+            --output "$response" \
+            "$DEPLOY_URL"
+          node scripts/deploy/cutover-response.mjs commit "$response" >/dev/null
+
+      - name: Production health gate
+        env:
+          HEALTH_URL: ${{ vars.PROD_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$HEALTH_URL"
+          case "$HEALTH_URL" in https://*) ;; *) echo "HEALTH_URL must use HTTPS" >&2; exit 1 ;; esac
+          for _ in $(seq 1 30); do
+            if curl --fail --silent --show-error "${HEALTH_URL%/}/readyz" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Live production machine lifecycle smoke gate
+        run: |
+          for template in python desktop; do
+            NEHEMIAH_SMOKE_TEMPLATE="$template" npm run test:nehemiah:smoke
+          done
+        env:
+          NEHEMIAH_TEST_URL: ${{ vars.PROD_API_URL }}
+          NEHEMIAH_TEST_API_KEY: ${{ secrets.PROD_SMOKE_API_KEY }}
+          NEHEMIAH_TEST_PROJECT_ID: ${{ vars.PROD_SMOKE_PROJECT_ID }}
+
+      - name: Keep production fenced after any failed cutover gate
+        if: ${{ (failure() || cancelled()) && steps.cutover.outputs.cutover_id != '' }}
+        env:
+          DEPLOY_URL: ${{ secrets.PROD_DEPLOY_WEBHOOK }}
+          DEPLOY_TOKEN: ${{ secrets.PROD_DEPLOY_TOKEN }}
+          CUTOVER_ID: ${{ steps.cutover.outputs.cutover_id }}
+        run: |
+          set -euo pipefail
+          case "$DEPLOY_URL" in https://*) ;; *) echo "DEPLOY_URL must use HTTPS" >&2; exit 1 ;; esac
+          [[ "$CUTOVER_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || { echo "invalid cutover id" >&2; exit 1; }
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-all-errors --max-time 30 \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data "{\"action\":\"hold_maintenance\",\"cutover_id\":\"${CUTOVER_ID}\",\"reason\":\"production-cutover-or-post-deploy-gate-failed\"}" \
+            --output /dev/null \
+            "$DEPLOY_URL"

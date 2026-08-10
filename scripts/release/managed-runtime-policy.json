@@ -1,0 +1,45 @@
+{
+  "contractVersion": 1,
+  "architectures": {
+    "amd64": {
+      "firecracker": {
+        "version": "1.15.1",
+        "sourceUrl": "https://github.com/firecracker-microvm/firecracker/releases/download/v1.15.1/firecracker-v1.15.1-x86_64.tgz",
+        "artifact": "nehemiah-runtime-firecracker_1.15.1_linux_amd64.tgz",
+        "format": "tgz",
+        "maxBytes": 16777216,
+        "sha256": "d4a32ab2322d887ca1bc4a4e7afa9cc35393e6362dfc2b3becb389d362e4275a",
+        "firecrackerSha256": "7e8b57e88c459396d4680d83dcdd8c7f72305447cb55b11f4ac98ad70a3f7825",
+        "jailerSha256": "4830a9b1fc6cece036d8992ff12f1fe9c5247aacad77f42c7aba683c7a08622e"
+      },
+      "kernel": {
+        "version": "6.1.155",
+        "sourceUrl": "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/x86_64/vmlinux-6.1.155",
+        "artifact": "nehemiah-runtime-kernel_6.1.155_linux_amd64.bin",
+        "format": "linux-kernel",
+        "maxBytes": 67108864,
+        "sha256": "e20e46d0c36c55c0d1014eb20576171b3f3d922260d9f792017aeff53af3d4f2"
+      }
+    },
+    "arm64": {
+      "firecracker": {
+        "version": "1.15.1",
+        "sourceUrl": "https://github.com/firecracker-microvm/firecracker/releases/download/v1.15.1/firecracker-v1.15.1-aarch64.tgz",
+        "artifact": "nehemiah-runtime-firecracker_1.15.1_linux_arm64.tgz",
+        "format": "tgz",
+        "maxBytes": 16777216,
+        "sha256": "00654ac1e702a22744121ea9f10a4f792ebd7c3a744cba587dfac9fcb79b41a5",
+        "firecrackerSha256": "e9ce7466c3b0d879d7a9158f4bf710dd5e131bbc5e580e5269fec66d5b5a0f0a",
+        "jailerSha256": "7faa581395fd1994ee005efc0a9c8826b4a9f0616dd942c2486adb8a8eac13f0"
+      },
+      "kernel": {
+        "version": "6.1.155",
+        "sourceUrl": "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/aarch64/vmlinux-6.1.155",
+        "artifact": "nehemiah-runtime-kernel_6.1.155_linux_arm64.bin",
+        "format": "linux-kernel",
+        "maxBytes": 67108864,
+        "sha256": "e3544b10603acbf3db492cb52e000d22ba202cb4b63b9add027565683e11c591"
+      }
+    }
+  }
+}

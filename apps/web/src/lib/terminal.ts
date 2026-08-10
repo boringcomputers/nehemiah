@@ -12,6 +12,10 @@ export interface TerminalHandle {
 export interface TerminalOptions {
 	host: HTMLDivElement;
 	machineId: string;
+	connection?: {
+		readonly url: string;
+		readonly protocols?: string | string[] | readonly string[];
+	};
 	fontSize?: number;
 	theme?: Record<string, string>;
 	bannerText: string;
@@ -19,8 +23,9 @@ export interface TerminalOptions {
 }
 
 /**
- * Set up an xterm.js terminal connected to a machine's serial console via
- * WebSocket, including the copy-selection key handler and resize listener.
+ * Set up an xterm.js terminal connected to a machine PTY via WebSocket,
+ * including the copy-selection key handler and resize listener. Managed hosts
+ * terminate this in the restart-safe guest agent; local mode uses serial.
  * Returns handles for cleanup.
  */
 export async function setupTerminal(opts: TerminalOptions): Promise<TerminalHandle> {
@@ -50,7 +55,9 @@ export async function setupTerminal(opts: TerminalOptions): Promise<TerminalHand
 	const onResize = () => fit.fit();
 	window.addEventListener('resize', onResize);
 
-	const ws = new WebSocket(wsUrl(`/v1/machines/${opts.machineId}/tty`));
+	const ws = opts.connection
+		? new WebSocket(opts.connection.url, opts.connection.protocols as string | string[] | undefined)
+		: new WebSocket(wsUrl(`/v1/machines/${opts.machineId}/tty`));
 	ws.binaryType = 'arraybuffer';
 	const enc = new TextEncoder();
 

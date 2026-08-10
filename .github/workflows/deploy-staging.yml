@@ -1,0 +1,325 @@
+name: Deploy staging
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nehemiah-staging
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      control_digest: ${{ steps.control.outputs.digest }}
+      gateway_digest: ${{ steps.gateway.outputs.digest }}
+    steps:
+      - name: Require an exact protected-main candidate
+        env:
+          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_EVENT" = workflow_dispatch
+          test "$SOURCE_REF" = refs/heads/main
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Authorize protected default-branch CI for the exact staging SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release/authorize-ci.sh
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: control
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: deploy/nehemiah/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/nehemiah-control:staging-${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+      - id: gateway
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: deploy/gateway/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/nehemiah-gateway:staging-${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+      - name: Scan the exact published image digests
+        env:
+          CONTROL_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-control@${{ steps.control.outputs.digest }}
+          GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-gateway@${{ steps.gateway.outputs.digest }}
+        run: |
+          scripts/release/guest-images/prepare-vulnerability-scanner.sh \
+            scripts/release/guest-images/policy.json amd64 "$RUNNER_TEMP/service-image-scan"
+          mkdir -p service-image-scan
+          cp "$RUNNER_TEMP/service-image-scan/database-evidence.json" service-image-scan/
+          status=0
+          for entry in "control:$CONTROL_IMAGE" "gateway:$GATEWAY_IMAGE"; do
+            name="${entry%%:*}"
+            image="${entry#*:}"
+            "$RUNNER_TEMP/service-image-scan/trivy" \
+              --cache-dir "$RUNNER_TEMP/service-image-scan/cache" \
+              image --no-progress --scanners vuln,secret \
+              --severity HIGH,CRITICAL --exit-code 1 \
+              --format json --output "service-image-scan/${name}.json" \
+              "$image" || status=1
+          done
+          exit "$status"
+      - name: Retain service-image scan evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-service-image-scans-${{ github.sha }}
+          path: service-image-scan
+          if-no-files-found: error
+          retention-days: 30
+      - name: Install checksum-verified Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+      - name: Sign the exact published image digests
+        env:
+          CONTROL_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-control@${{ steps.control.outputs.digest }}
+          GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-gateway@${{ steps.gateway.outputs.digest }}
+        run: cosign sign --yes "$CONTROL_IMAGE" "$GATEWAY_IMAGE"
+      - name: Attest control-plane build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/nehemiah-control
+          subject-digest: ${{ steps.control.outputs.digest }}
+          push-to-registry: true
+      - name: Attest gateway build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/nehemiah-gateway
+          subject-digest: ${{ steps.gateway.outputs.digest }}
+          push-to-registry: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install checksum-verified Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+      - name: Verify signatures and provenance before deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-control@${{ needs.build.outputs.control_digest }}
+          GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-gateway@${{ needs.build.outputs.gateway_digest }}
+        run: |
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/deploy-staging.yml@${GITHUB_REF}"
+          for image in "$CONTROL_IMAGE" "$GATEWAY_IMAGE"; do
+            cosign verify \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$image" >/dev/null
+            gh attestation verify "oci://$image" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy-staging.yml" \
+              --source-ref "$GITHUB_REF" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners >/dev/null
+          done
+      - name: Drain and fence every prior schema/protocol revision
+        id: cutover
+        env:
+          DEPLOY_URL: ${{ secrets.STAGING_DEPLOY_WEBHOOK }}
+          DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+          CONTROL_DIGEST: ${{ needs.build.outputs.control_digest }}
+          GATEWAY_DIGEST: ${{ needs.build.outputs.gateway_digest }}
+          SCHEMA_EPOCH: 0035_project_allocation_bounds.sql
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_URL" && test -n "$DEPLOY_TOKEN"
+          case "$DEPLOY_URL" in https://*) ;; *) echo "DEPLOY_URL must use HTTPS" >&2; exit 1 ;; esac
+          [[ "$CONTROL_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid control digest" >&2; exit 1; }
+          [[ "$GATEWAY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid gateway digest" >&2; exit 1; }
+          response="$RUNNER_TEMP/nehemiah-cutover-prepare.json"
+          curl --fail-with-body --silent --show-error \
+            --max-time 120 \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data "{\"action\":\"prepare_maintenance_cutover\",\"schema_epoch\":\"${SCHEMA_EPOCH}\",\"control_digest\":\"${CONTROL_DIGEST}\",\"gateway_digest\":\"${GATEWAY_DIGEST}\"}" \
+            --output "$response" \
+            "$DEPLOY_URL"
+          cutover_id="$(node scripts/deploy/cutover-response.mjs prepare "$response")"
+          echo "cutover_id=$cutover_id" >>"$GITHUB_OUTPUT"
+      - name: Run the one-shot migration from the verified control image
+        env:
+          CONTROL_IMAGE: ghcr.io/${{ github.repository_owner }}/nehemiah-control@${{ needs.build.outputs.control_digest }}
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+        run: |
+          test -n "$DATABASE_URL" && test -n "$MIGRATION_DATABASE_URL"
+          test "$DATABASE_URL" != "$MIGRATION_DATABASE_URL"
+          docker pull "$CONTROL_IMAGE" >/dev/null
+          docker run --rm \
+            --entrypoint node \
+            -e NODE_ENV=production \
+            -e DATABASE_URL \
+            -e MIGRATION_DATABASE_URL \
+            "$CONTROL_IMAGE" dist/db/migrate.js
+      - name: Request digest-pinned staging deployment
+        id: deploy_request
+        env:
+          DEPLOY_URL: ${{ secrets.STAGING_DEPLOY_WEBHOOK }}
+          DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+          CONTROL_DIGEST: ${{ needs.build.outputs.control_digest }}
+          GATEWAY_DIGEST: ${{ needs.build.outputs.gateway_digest }}
+          SCHEMA_EPOCH: 0035_project_allocation_bounds.sql
+          CUTOVER_ID: ${{ steps.cutover.outputs.cutover_id }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_URL" && test -n "$DEPLOY_TOKEN"
+          case "$DEPLOY_URL" in https://*) ;; *) echo "DEPLOY_URL must use HTTPS" >&2; exit 1 ;; esac
+          [[ "$CONTROL_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid control digest" >&2; exit 1; }
+          [[ "$GATEWAY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid gateway digest" >&2; exit 1; }
+          [[ "$CUTOVER_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || { echo "invalid cutover id" >&2; exit 1; }
+          response="$RUNNER_TEMP/nehemiah-cutover-commit.json"
+          curl --fail-with-body --silent --show-error \
+            --max-time 120 \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data "{\"action\":\"commit_maintenance_cutover\",\"cutover_id\":\"${CUTOVER_ID}\",\"schema_epoch\":\"${SCHEMA_EPOCH}\",\"control_digest\":\"${CONTROL_DIGEST}\",\"gateway_digest\":\"${GATEWAY_DIGEST}\"}" \
+            --output "$response" \
+            "$DEPLOY_URL"
+          node scripts/deploy/cutover-response.mjs commit "$response" >/dev/null
+      - name: Health gate
+        env:
+          HEALTH_URL: ${{ vars.STAGING_HEALTH_URL }}
+        run: |
+          test -n "$HEALTH_URL"
+          case "$HEALTH_URL" in https://*) ;; *) echo "HEALTH_URL must use HTTPS" >&2; exit 1 ;; esac
+          for _ in $(seq 1 30); do
+            if curl --fail --silent --show-error "${HEALTH_URL%/}/readyz" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Live machine lifecycle smoke gate
+        run: |
+          for template in python desktop; do
+            NEHEMIAH_SMOKE_TEMPLATE="$template" npm run test:nehemiah:smoke
+          done
+        env:
+          NEHEMIAH_TEST_URL: ${{ vars.STAGING_API_URL }}
+          NEHEMIAH_TEST_API_KEY: ${{ secrets.STAGING_SMOKE_API_KEY }}
+          NEHEMIAH_TEST_PROJECT_ID: ${{ vars.STAGING_SMOKE_PROJECT_ID }}
+      - name: Live cross-tenant isolation gate
+        run: npm run test:nehemiah:tenant-isolation
+        env:
+          NEHEMIAH_TEST_URL: ${{ vars.STAGING_API_URL }}
+          NEHEMIAH_TEST_TENANT_A_KEY: ${{ secrets.STAGING_TENANT_A_API_KEY }}
+          NEHEMIAH_TEST_TENANT_A_PROJECT_ID: ${{ vars.STAGING_TENANT_A_PROJECT_ID }}
+          NEHEMIAH_TEST_TENANT_B_KEY: ${{ secrets.STAGING_TENANT_B_API_KEY }}
+      - name: Live host-loss and replacement gate
+        run: npm run test:nehemiah:host-loss
+        env:
+          NEHEMIAH_TEST_URL: ${{ vars.STAGING_API_URL }}
+          NEHEMIAH_TEST_API_KEY: ${{ secrets.STAGING_SMOKE_API_KEY }}
+          NEHEMIAH_TEST_PROJECT_ID: ${{ vars.STAGING_SMOKE_PROJECT_ID }}
+          NEHEMIAH_HOST_LOSS_WEBHOOK: ${{ secrets.STAGING_HOST_LOSS_WEBHOOK }}
+          NEHEMIAH_HOST_LOSS_TOKEN: ${{ secrets.STAGING_HOST_LOSS_TOKEN }}
+          NEHEMIAH_TEST_HOST_ID: ${{ vars.STAGING_HOST_LOSS_HOST_ID }}
+      - name: Live billing reconciliation gate
+        run: npm run test:nehemiah:billing-reconciliation
+        env:
+          NEHEMIAH_TEST_URL: ${{ vars.STAGING_API_URL }}
+          NEHEMIAH_TEST_API_KEY: ${{ secrets.STAGING_SMOKE_API_KEY }}
+          NEHEMIAH_BILLING_PROJECT_ID: ${{ vars.STAGING_SMOKE_PROJECT_ID }}
+          NEHEMIAH_BILLING_MIN_VCPU_SECONDS: ${{ vars.STAGING_BILLING_MIN_VCPU_SECONDS }}
+      - name: Live REST and WebSocket load gate
+        run: npm run test:nehemiah:load
+        env:
+          NEHEMIAH_TEST_URL: ${{ vars.STAGING_API_URL }}
+          NEHEMIAH_TEST_API_KEY: ${{ secrets.STAGING_SMOKE_API_KEY }}
+          NEHEMIAH_TEST_PROJECT_ID: ${{ vars.STAGING_SMOKE_PROJECT_ID }}
+          NEHEMIAH_LOAD_CONCURRENCY: ${{ vars.STAGING_LOAD_CONCURRENCY }}
+          NEHEMIAH_LOAD_REQUESTS: ${{ vars.STAGING_LOAD_REQUESTS }}
+          NEHEMIAH_LOAD_WS_HOLD_MS: ${{ vars.STAGING_LOAD_WS_HOLD_MS }}
+      - name: Create the exact successful-staging promotion record
+        env:
+          PROMOTION_REPOSITORY: ${{ github.repository }}
+          PROMOTION_RUN_ID: ${{ github.run_id }}
+          PROMOTION_RUN_ATTEMPT: ${{ github.run_attempt }}
+          PROMOTION_HEAD_SHA: ${{ github.sha }}
+          PROMOTION_SCHEMA_EPOCH: 0035_project_allocation_bounds.sql
+          PROMOTION_CONTROL_DIGEST: ${{ needs.build.outputs.control_digest }}
+          PROMOTION_GATEWAY_DIGEST: ${{ needs.build.outputs.gateway_digest }}
+        run: |
+          set -euo pipefail
+          promotion_dir="$RUNNER_TEMP/staging-promotion"
+          install -d -m 0700 "$promotion_dir"
+          node scripts/deploy/promotion.mjs create "$promotion_dir/promotion.json"
+      - name: Attest the exact successful-staging promotion record
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/staging-promotion/promotion.json
+      - name: Retain the bounded successful-staging promotion record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-promotion/promotion.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Keep staging fenced after a failed cutover gate
+        if: ${{ (failure() || cancelled()) && steps.cutover.outputs.cutover_id != '' }}
+        env:
+          DEPLOY_URL: ${{ secrets.STAGING_DEPLOY_WEBHOOK }}
+          DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+          CUTOVER_ID: ${{ steps.cutover.outputs.cutover_id }}
+        run: |
+          set -euo pipefail
+          case "$DEPLOY_URL" in https://*) ;; *) echo "DEPLOY_URL must use HTTPS" >&2; exit 1 ;; esac
+          [[ "$CUTOVER_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || { echo "invalid cutover id" >&2; exit 1; }
+          curl --fail-with-body --silent --show-error \
+            --max-time 30 \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data "{\"action\":\"hold_maintenance\",\"cutover_id\":\"${CUTOVER_ID}\",\"reason\":\"cutover-or-post-deploy-gate-failed\"}" \
+            --output /dev/null \
+            "$DEPLOY_URL"
