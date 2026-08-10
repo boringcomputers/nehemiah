@@ -311,13 +311,13 @@
 			if (vncHandle?.rfb) vncHandle.rfb.viewOnly = true;
 		}
 		const path = build
-			? `/v1/machines/${machine.id}/shell-agent?goal=${encodeURIComponent(g)}`
-			: `/v1/machines/${machine.id}/agent?goal=${encodeURIComponent(g)}`;
+			? `/v1/machines/${machine.id}/shell-agent`
+			: `/v1/machines/${machine.id}/agent`;
 		const finish = () => {
 			agentRunning = false;
 			if (!build && vncHandle?.rfb) vncHandle.rfb.viewOnly = false;
 		};
-		agentWs = connectAgent(machine.id, path, {
+		agentWs = connectAgent(machine.id, path, g, {
 			onPreview: (text) => {
 				const port = parseInt(text, 10);
 				if (machine && Number.isInteger(port)) previewLink = previewUrl(machine.id, port);
@@ -560,6 +560,7 @@
 			</span>
 			<input
 				bind:value={goal}
+				maxlength="4096"
 				onkeydown={promptKey}
 				disabled={agentRunning || phase !== 'live'}
 				placeholder={agentMode === 'build'
