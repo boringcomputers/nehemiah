@@ -403,6 +403,9 @@
 		return () => {
 			window.clearInterval(interval);
 			disconnectConnection();
+			// Invalidate any pending preview so a session that resolves after the page
+			// is torn down does not publish a URL or redirect the already-opened popup.
+			previewGeneration += 1;
 		};
 	});
 </script>
