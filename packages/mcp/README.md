@@ -35,12 +35,12 @@ _"launch a computer and build me a snake game."_
 
 ```json
 {
-	"mcpServers": {
-		"nehemiah": {
-			"command": "npx",
-			"args": ["-y", "nehemiah-mcp"],
-			"env": { "NEHEMIAH_URL": "http://localhost:8080" }
-		}
-	}
+  "mcpServers": {
+    "nehemiah": {
+      "command": "npx",
+      "args": ["-y", "nehemiah-mcp"],
+      "env": { "NEHEMIAH_URL": "http://localhost:8080" }
+    }
+  }
 }
 ```

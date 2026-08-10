@@ -195,10 +195,10 @@ only through the SSH tunnel.
 
 ## Files in this directory
 
-| File | Purpose |
-|------|---------|
-| `deploy.sh` | Build & deploy nehemiahd to the box; install/enable systemd unit; health-check. |
-| `tunnel.sh` | SSH tunnel `localhost:8080 → box:8080` for running the demo. |
-| `teardown.sh` | Delete the Latitude server via API to stop billing (confirmation required). |
-| `nehemiahd.service` | systemd unit installed on the box by `deploy.sh`. |
-| `README.md` | This runbook. |
+| File                | Purpose                                                                         |
+| ------------------- | ------------------------------------------------------------------------------- |
+| `deploy.sh`         | Build & deploy nehemiahd to the box; install/enable systemd unit; health-check. |
+| `tunnel.sh`         | SSH tunnel `localhost:8080 → box:8080` for running the demo.                    |
+| `teardown.sh`       | Delete the Latitude server via API to stop billing (confirmation required).     |
+| `nehemiahd.service` | systemd unit installed on the box by `deploy.sh`.                               |
+| `README.md`         | This runbook.                                                                   |

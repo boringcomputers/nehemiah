@@ -8,7 +8,7 @@ easier path — see below).
 
 nehemiahd runs Firecracker microVMs, which need **Linux + a functional `/dev/kvm`**.
 Neither macOS nor Windows provides that natively, but both can host a Linux VM
-that *does* — Firecracker needs only **one** level of nested virtualization, which
+that _does_ — Firecracker needs only **one** level of nested virtualization, which
 modern Macs and Windows 11 both expose.
 
 ## Quickstart (Mac)
@@ -24,16 +24,16 @@ npm run dev -w web                                 # → http://localhost:5173
 `SKIP_DESKTOP=1` skips the ~8-min desktop image (the python shell still works).
 `limactl stop boring` frees the VM's RAM.
 
-| Path | Status | Why | Extra work vs a Linux box |
-| --- | --- | --- | --- |
-| **Apple Silicon Mac** | ✅ **built + booted a microVM** | nested virt on M3+/macOS 15+ exposes `/dev/kvm` in a Linux guest | arm64 rebuilds — done, automated by `setup-local.sh` |
-| **Windows 11 (x86_64)** | ✅ designed (not yet wired) | WSL2 ships a KVM-enabled kernel; nested virt on by default | ~none — the **existing x86_64 images work unchanged** |
+| Path                    | Status                          | Why                                                              | Extra work vs a Linux box                             |
+| ----------------------- | ------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
+| **Apple Silicon Mac**   | ✅ **built + booted a microVM** | nested virt on M3+/macOS 15+ exposes `/dev/kvm` in a Linux guest | arm64 rebuilds — done, automated by `setup-local.sh`  |
+| **Windows 11 (x86_64)** | ✅ designed (not yet wired)     | WSL2 ships a KVM-enabled kernel; nested virt on by default       | ~none — the **existing x86_64 images work unchanged** |
 
 ---
 
 ## Apple Silicon — verified on an M4 Pro / macOS 26
 
-The make-or-break question is whether a Linux VM on the Mac gets a *working* KVM
+The make-or-break question is whether a Linux VM on the Mac gets a _working_ KVM
 that Firecracker can boot on. **It does.** Verified hands-on in a
 [Lima](https://lima-vm.io) `vz` guest with `nestedVirtualization: true`
 ([`lima-boring.yaml`](lima-boring.yaml)):
@@ -63,7 +63,7 @@ arm64 artifacts exist (verified live):
 2. **Boot a nested-virt Linux guest:** `limactl start --name=boring infra/local/lima-boring.yaml`
    (arm64 Ubuntu 24.04, `vz`, `nestedVirtualization: true`).
 3. **Confirm KVM:** `limactl shell boring -- sudo kvm-ok` → "KVM acceleration can be used".
-4. **Run the arm64-ported setup inside the guest** (see *Repo changes* below), with
+4. **Run the arm64-ported setup inside the guest** (see _Repo changes_ below), with
    `BIND_LOCALHOST=1`.
 5. **Reach it from macOS** via the Lima-forwarded port / `ssh -L 8080:localhost:8080`,
    then point `apps/web/.env` at it and `npm run dev`.
@@ -87,11 +87,11 @@ arm64 artifacts exist (verified live):
 
 - **Guest internet:** the uplink is auto-detected (`ip route show default`), but
   the egress firewall blocks RFC1918 destinations — and under Lima the guest's own
-  gateway *is* RFC1918 (double NAT), so a microVM's traffic to the outside is
+  gateway _is_ RFC1918 (double NAT), so a microVM's traffic to the outside is
   dropped. The desktop's browser opens but pages don't load until the firewall is
   relaxed for the Lima gateway (or `NEHEMIAH_NET` egress rules are loosened for local
   mode). Doesn't affect snapshot-restore or the desktop UI.
-- **Rebuilding the desktop image in a *live* Lima VM is finicky** — nehemiahd's
+- **Rebuilding the desktop image in a _live_ Lima VM is finicky** — nehemiahd's
   warm-pool VM can hold `desktop.ext4` open. `setup-local.sh` builds it cleanly on
   first run; to rebuild, `limactl stop boring` (or stop nehemiahd) first.
 - Cold desktop boot is slow under nested virt (~45 s); the warm pool hides it.
@@ -126,10 +126,11 @@ the distro with no custom kernel.
 
 ## Repo changes needed (both paths)
 
-The infra scripts assume *x86_64* and *SSH into a remote box*. To make
+The infra scripts assume _x86_64_ and _SSH into a remote box_. To make
 `setup.sh --arch aarch64 --local` real:
 
 **P0 — arch + local mode**
+
 - `setup.sh`: relax the `[[ ARCH == x86_64 ]]` guard to `{x86_64,aarch64}`; make the
   Go tarball arch-aware (`linux-amd64` ↔ `linux-arm64`); add a **LOCAL** target that
   runs on the same host (or `wsl`/`limactl shell`) instead of over SSH.
@@ -138,6 +139,7 @@ The infra scripts assume *x86_64* and *SSH into a remote box*. To make
   paths.
 
 **P1 — arm64 image builds**
+
 - `build-rootfs.sh`: `ALPINE_ARCH` from the target arch (aarch64 is first-class).
 - `build-desktop-rootfs.sh`: Node tarball `linux-x64` → `linux-arm64`; debootstrap
   auto-selects arm64 from the guest; verify `cursor-agent` arm64.

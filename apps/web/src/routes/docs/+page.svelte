@@ -31,9 +31,8 @@
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">Base URL</h2>
 	<p class="mt-2 text-[13px] leading-relaxed text-ink-muted">
 		Run your own <span class="text-ink">nehemiahd</span> (see the
-		<a
-			href="https://github.com/boringcomputers/nehemiah"
-			class="text-accent hover:underline">repo</a
+		<a href="https://github.com/boringcomputers/nehemiah" class="text-accent hover:underline"
+			>repo</a
 		>) and point everything at your deployment. It listens on this by default:
 	</p>
 	<div class="mt-3">{@render code(API)}</div>
@@ -96,8 +95,8 @@ curl -s -X POST ${API}/v1/machines \\
 
 	<h2 class="mt-12 text-[15px] font-semibold text-ink">Previews</h2>
 	<p class="mt-2 text-[13px] leading-relaxed text-ink-muted">
-		Run a server inside a connected machine and open its port through nehemiahd — works locally (over
-		a tunnel) and on public deployments, no wildcard DNS:
+		Run a server inside a connected machine and open its port through nehemiahd — works locally
+		(over a tunnel) and on public deployments, no wildcard DNS:
 	</p>
 	<div class="mt-3">
 		{@render code(`${API}/v1/machines/<machine-id>/web/<port>/`)}

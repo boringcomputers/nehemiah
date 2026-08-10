@@ -157,7 +157,10 @@ export interface NehemiahClient {
 	 * Reset a machine's TTL to `ttlSeconds` from now (omit for the server's
 	 * default; clamped like create). Returns the machine with its new expiry.
 	 */
-	readonly extendMachine: (id: string, ttlSeconds?: number) => Effect.Effect<Machine, NehemiahError>;
+	readonly extendMachine: (
+		id: string,
+		ttlSeconds?: number
+	) => Effect.Effect<Machine, NehemiahError>;
 	/**
 	 * Run one shell command in the machine and get `{output, exit_code}` back —
 	 * deterministic, no TTY. A 409 means the console is busy (another exec or an

@@ -5,13 +5,13 @@ approachable codebase — most changes touch one part of it.
 
 ## Layout
 
-| Path | What | Language |
-| --- | --- | --- |
-| `apps/web/` | The site — the launcher, terminal, desktop, agent, docs | TypeScript / SvelteKit |
-| `nehemiahd/` | The host daemon — boots and manages the microVMs | Go |
-| `packages/sdk/` | A tiny REST/WS client | TypeScript |
-| `packages/mcp/` | The MCP server | JavaScript (Node) |
-| `infra/latitude/` | Host setup — rootfs, kernel, networking, Caddy | shell |
+| Path              | What                                                    | Language               |
+| ----------------- | ------------------------------------------------------- | ---------------------- |
+| `apps/web/`       | The site — the launcher, terminal, desktop, agent, docs | TypeScript / SvelteKit |
+| `nehemiahd/`      | The host daemon — boots and manages the microVMs        | Go                     |
+| `packages/sdk/`   | A tiny REST/WS client                                   | TypeScript             |
+| `packages/mcp/`   | The MCP server                                          | JavaScript (Node)      |
+| `infra/latitude/` | Host setup — rootfs, kernel, networking, Caddy          | shell                  |
 
 ## Getting started
 

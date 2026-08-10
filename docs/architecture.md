@@ -44,6 +44,7 @@ and stateful in a way per-request containers can't match.
 What we own vs. what we rent, and what migrates over time.
 
 **OWN (the core — build and keep):**
+
 - microVM lifecycle (Firecracker driver, serial-over-stdio transport)
 - scheduler / placement across hosts
 - snapshots (template capture + restore)
@@ -53,6 +54,7 @@ What we own vs. what we rent, and what migrates over time.
 - the SDK (the developer surface)
 
 **WRAP — keep (best-in-class, no reason to build):**
+
 - **R2** — object storage for images/snapshots/artifacts
 - **Cloudflare edge** — CDN, DNS, DDoS, WAF in front of Nehemiah
 - **Clerk** — auth / orgs / API keys
@@ -61,12 +63,14 @@ What we own vs. what we rent, and what migrates over time.
 - **OTel** — tracing / metrics / logs
 
 **WRAP now, OWN later (strategic, migrate when scale justifies):**
+
 - **compute substrate** — start on rented bare metal; grow toward owned/colocated
   hardware as unit economics and demand harden.
 - **inference gateway** — wrap a provider/router first; pull it in-house as
   co-location and routing become a differentiator.
 
 **RENT (commodity, never own):**
+
 - **Latitude.sh bare metal** — the physical hosts. Interchangeable capacity.
 
 ## One-box prototype

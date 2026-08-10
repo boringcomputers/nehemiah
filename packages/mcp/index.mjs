@@ -15,7 +15,8 @@ import {
 import { Effect } from "effect";
 import { make } from "nehemiah-sdk";
 
-const BASE = process.env.NEHEMIAH_URL || process.env.BORING_URL || "http://localhost:8080";
+const BASE =
+  process.env.NEHEMIAH_URL || process.env.BORING_URL || "http://localhost:8080";
 const WSBASE = BASE.replace(/^http/, "ws");
 const PREVIEW_HOST = new URL(BASE).host;
 
