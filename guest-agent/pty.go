@@ -67,7 +67,7 @@ func (s *agentServer) serveTTY(conn net.Conn, req protocolFrame) {
 	_ = master.Close()
 	reader.Wait()
 	code, _ := commandResult(ctx, waitErr)
-	_ = w.sendTerminal(protocolFrame{Type: frameResult, ExitCode: &code})
+	w.finalize(protocolFrame{Type: frameResult, ExitCode: &code})
 }
 
 const ttyStdinBufferedFrames = 64
@@ -150,10 +150,11 @@ func watchTTYControlFrames(conn net.Conn, cancel context.CancelFunc, master *os.
 			target = master
 		}
 		if err := applyTTYControlFrame(target, frame); err != nil {
-			// Cancel first: the best-effort error frame must never delay teardown
-			// if the client has stopped reading responses.
+			// Record the authoritative outcome and cancel; the finalizer delivers
+			// it, so teardown never waits on this send and completion cannot race
+			// it away.
+			w.forceOutcome(protocolFrame{Type: frameError, Code: "invalid_tty_frame", Error: err.Error()})
 			cancel()
-			_ = w.sendTerminal(protocolFrame{Type: frameError, Code: "invalid_tty_frame", Error: err.Error()})
 			return
 		}
 		if frame.Type == frameCancel {
@@ -233,9 +234,10 @@ func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, con
 		switch f.Type {
 		case frameStdin:
 			if err := pump.enqueue(f.Data); err != nil {
-				// Cancel first so a client that stopped reading cannot delay teardown.
+				// Record the authoritative overflow outcome and cancel; the
+				// finalizer delivers it so completion cannot race it away.
+				w.forceOutcome(protocolFrame{Type: frameError, Code: "tty_input_overflow", Error: err.Error()})
 				cancel()
-				_ = w.sendTerminal(protocolFrame{Type: frameError, Code: "tty_input_overflow", Error: err.Error()})
 			}
 		case frameResize:
 			_ = setPTYSize(master, f.Rows, f.Cols)
@@ -251,7 +253,7 @@ func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, con
 	_ = master.Close()
 	reader.Wait()
 	code, timedOut := commandResult(ctx, waitErr)
-	_ = w.sendTerminal(protocolFrame{Type: frameResult, ExitCode: &code, TimedOut: timedOut, Truncated: budget.wasTruncated()})
+	w.finalize(protocolFrame{Type: frameResult, ExitCode: &code, TimedOut: timedOut, Truncated: budget.wasTruncated()})
 }
 
 func streamPTY(wg *sync.WaitGroup, r io.Reader, w *lockedFrameWriter, budget *outputBudget) {

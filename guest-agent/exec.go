@@ -19,11 +19,11 @@ const (
 	// frameWriteTimeout bounds a single response-frame write. A client that stops
 	// reading response frames must not be able to hold the frame mutex and stall
 	// session cancellation or cleanup indefinitely.
-	frameWriteTimeout = 10 * time.Second
+	frameWriteTimeout = 3 * time.Second
 	// teardownWriteTimeout bounds response writes once the session is cancelled.
 	// It is short enough that a non-reading client cannot delay slot release, yet
 	// long enough that a reading client still receives the final result frame.
-	teardownWriteTimeout = 2 * time.Second
+	teardownWriteTimeout = 500 * time.Millisecond
 )
 
 type lockedFrameWriter struct {
@@ -33,6 +33,33 @@ type lockedFrameWriter struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	terminalSent     bool
+	forced           *protocolFrame
+}
+
+// forceOutcome records the authoritative terminal frame (for example an input
+// overflow error) that finalize must deliver, instead of the normal result. The
+// outcome is decided by cause here rather than by a race between the error path
+// and command completion for who writes the terminal frame first.
+func (w *lockedFrameWriter) forceOutcome(f protocolFrame) {
+	w.mu.Lock()
+	if w.forced == nil && !w.terminalSent {
+		forced := f
+		w.forced = &forced
+	}
+	w.mu.Unlock()
+}
+
+// finalize delivers the session's single terminal frame: the recorded forced
+// outcome if any, otherwise the provided result. It is the only terminal sender
+// on the completion path, so no error/result race can drop the real outcome.
+func (w *lockedFrameWriter) finalize(result protocolFrame) {
+	w.mu.Lock()
+	frame := result
+	if w.forced != nil {
+		frame = *w.forced
+	}
+	w.mu.Unlock()
+	_ = w.sendTerminal(frame)
 }
 
 // send writes a non-terminal frame (readiness, streamed output). It is dropped if
@@ -53,6 +80,13 @@ func (w *lockedFrameWriter) write(f protocolFrame, terminal bool) error {
 	if w.terminalSent {
 		// The session already emitted its single terminal frame; drop anything
 		// after it (a late output frame or a second terminal frame).
+		w.mu.Unlock()
+		return nil
+	}
+	// Once cancelled, drop streamed (non-terminal) output so teardown is not
+	// delayed delivering now-moot output to a client that may have stopped
+	// reading. The single terminal frame is still delivered (bounded).
+	if !terminal && w.ctx != nil && w.ctx.Err() != nil {
 		w.mu.Unlock()
 		return nil
 	}
@@ -183,7 +217,7 @@ func (s *agentServer) runPiped(ctx context.Context, cancel context.CancelFunc, c
 	close(done)
 
 	code, timedOut := commandResult(ctx, waitErr)
-	_ = w.sendTerminal(protocolFrame{Type: frameResult, ExitCode: &code, TimedOut: timedOut, Truncated: budget.wasTruncated()})
+	w.finalize(protocolFrame{Type: frameResult, ExitCode: &code, TimedOut: timedOut, Truncated: budget.wasTruncated()})
 }
 
 func streamOutput(wg *sync.WaitGroup, r io.Reader, frameType string, w *lockedFrameWriter, budget *outputBudget) {
