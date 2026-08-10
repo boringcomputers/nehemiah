@@ -1,0 +1,14 @@
+import { type HealthServices } from './http/health.js';
+import { Router } from './http/router.js';
+import { type ApiKeyRouteServices } from './http/routes/api-keys.js';
+import { type BillingRouteServices } from './http/routes/billing.js';
+import { type DeviceAuthorizationRouteServices } from './http/routes/device-authorization.js';
+import { type InternalRouteServices } from './http/routes/internal-hosts.js';
+import { type IdentityLifecycleRouteServices } from './http/routes/identity-lifecycle.js';
+import { type MachineRouteServices } from './http/routes/machines.js';
+import { type OrganizationRouteServices } from './http/routes/organizations.js';
+import { type StripeRouteServices } from './http/routes/stripe-webhook.js';
+import { type TemplateRouteServices } from './http/routes/templates.js';
+import { type VolumeRouteServices } from './http/routes/volumes.js';
+export type AppServices = HealthServices & MachineRouteServices & ApiKeyRouteServices & IdentityLifecycleRouteServices & InternalRouteServices & BillingRouteServices & StripeRouteServices & OrganizationRouteServices & DeviceAuthorizationRouteServices & TemplateRouteServices & VolumeRouteServices;
+export declare const buildRouter: () => Router<AppServices>;
