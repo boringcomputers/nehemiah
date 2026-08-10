@@ -78,18 +78,26 @@ async function runTask(id, goal) {
       : new WebSocket(socketTarget.url);
     const log = [];
     let previewPort = null;
-    const timer = setTimeout(() => {
+    let settled = false;
+    let timer;
+    // Settle exactly once, from whichever terminal event fires first: a done/error
+    // message, a socket error, a socket close (a clean close after `start` but
+    // before a terminal message must not hang until the timeout), or the timeout.
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       try {
         ws.close();
       } catch {}
-      resolve({ log, previewPort, note: "timed out" });
-    }, 180000);
+      resolve(value);
+    };
+    timer = setTimeout(() => settle({ log, previewPort, note: "timed out" }), 180000);
     ws.onopen = () => {
       try {
         ws.send(socketTarget.initialMessage);
       } catch {
-        clearTimeout(timer);
-        resolve({ log, previewPort, note: "connection error" });
+        settle({ log, previewPort, note: "connection error" });
       }
     };
     ws.onmessage = (e) => {
@@ -107,17 +115,11 @@ async function runTask(id, goal) {
       } else if (m.type === "action") log.push("$ " + m.text);
       else if (m.type === "say" || m.type === "done") log.push(m.text);
       if (m.type === "done" || m.type === "error") {
-        clearTimeout(timer);
-        try {
-          ws.close();
-        } catch {}
-        resolve({ log: log.filter(Boolean), previewPort });
+        settle({ log: log.filter(Boolean), previewPort });
       }
     };
-    ws.onerror = () => {
-      clearTimeout(timer);
-      resolve({ log, previewPort, note: "connection error" });
-    };
+    ws.onerror = () => settle({ log, previewPort, note: "connection error" });
+    ws.onclose = () => settle({ log: log.filter(Boolean), previewPort, note: "connection closed" });
   });
   let preview = null;
   if (result.previewPort !== null) {
