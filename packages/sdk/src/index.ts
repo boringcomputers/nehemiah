@@ -1,6 +1,6 @@
 /**
- * boring-computers-sdk — Effect-native TypeScript client for the boring
- * computers Firecracker microVM API.
+ * nehemiah-sdk — Effect-native TypeScript client for the Nehemiah
+ * Firecracker microVM API.
  *
  * REST calls go through `@effect/platform`'s `HttpClient` and validate responses
  * with `Schema`; errors are tagged; the serial console is a `Stream` with
@@ -60,7 +60,7 @@ const VolumeSchema = Schema.Struct({
 	files: Schema.optional(Schema.Number)
 });
 
-/** A microVM as returned by the boringd REST API. */
+/** A microVM as returned by the nehemiahd REST API. */
 export type Machine = Schema.Schema.Type<typeof MachineSchema>;
 export type MachineMode = Machine['mode'];
 export type MachineStatus = Machine['status'];
@@ -78,7 +78,7 @@ const ExecResultSchema = Schema.Struct({
 	duration_ms: Schema.Number
 });
 
-/** The result of running one command via {@link BoringClient.exec}. */
+/** The result of running one command via {@link NehemiahClient.exec}. */
 export type ExecResult = Schema.Schema.Type<typeof ExecResultSchema>;
 
 export interface ExecOptions {
@@ -95,8 +95,8 @@ export interface CreateMachineOptions {
 	readonly volume?: string;
 }
 
-export interface BoringClientOptions {
-	/** Base URL of boringd. Defaults to `http://localhost:8080`. */
+export interface NehemiahClientOptions {
+	/** Base URL of nehemiahd. Defaults to `http://localhost:8080`. */
 	readonly baseUrl?: string;
 	/** Optional bearer token (sent as `Authorization` and `?token=` on WS). */
 	readonly token?: string;
@@ -117,7 +117,7 @@ export class ResponseError extends Data.TaggedError('ResponseError')<{
 	readonly body: string;
 }> {}
 
-export type BoringError = RequestError | ResponseError;
+export type NehemiahError = RequestError | ResponseError;
 
 // --- serial console ---------------------------------------------------------
 
@@ -129,12 +129,12 @@ export interface TtyChannel {
 
 // --- service ----------------------------------------------------------------
 
-export interface BoringClient {
-	readonly createMachine: (opts?: CreateMachineOptions) => Effect.Effect<Machine, BoringError>;
-	readonly listMachines: Effect.Effect<ReadonlyArray<Machine>, BoringError>;
-	readonly getMachine: (id: string) => Effect.Effect<Machine, BoringError>;
-	readonly destroyMachine: (id: string) => Effect.Effect<void, BoringError>;
-	readonly branchMachine: (id: string) => Effect.Effect<Machine, BoringError>;
+export interface NehemiahClient {
+	readonly createMachine: (opts?: CreateMachineOptions) => Effect.Effect<Machine, NehemiahError>;
+	readonly listMachines: Effect.Effect<ReadonlyArray<Machine>, NehemiahError>;
+	readonly getMachine: (id: string) => Effect.Effect<Machine, NehemiahError>;
+	readonly destroyMachine: (id: string) => Effect.Effect<void, NehemiahError>;
+	readonly branchMachine: (id: string) => Effect.Effect<Machine, NehemiahError>;
 	/**
 	 * Fleet fork: N live clones from ONE snapshot of the machine (the source is
 	 * paused once, however many clones are made). Partial failures keep the
@@ -143,21 +143,24 @@ export interface BoringClient {
 	readonly branchMachines: (
 		id: string,
 		count: number
-	) => Effect.Effect<ReadonlyArray<Machine>, BoringError>;
+	) => Effect.Effect<ReadonlyArray<Machine>, NehemiahError>;
 	/**
 	 * Freeze a running machine as a named template; new machines boot from it in
 	 * milliseconds via `createMachine({template: name})`. 409 if the name exists.
 	 */
-	readonly publishMachine: (id: string, name: string) => Effect.Effect<Template, BoringError>;
+	readonly publishMachine: (id: string, name: string) => Effect.Effect<Template, NehemiahError>;
 	/** List templates: the built-ins plus everything published. */
-	readonly listTemplates: Effect.Effect<ReadonlyArray<Template>, BoringError>;
+	readonly listTemplates: Effect.Effect<ReadonlyArray<Template>, NehemiahError>;
 	/** Delete a published template (built-ins are refused). */
-	readonly deleteTemplate: (name: string) => Effect.Effect<void, BoringError>;
+	readonly deleteTemplate: (name: string) => Effect.Effect<void, NehemiahError>;
 	/**
 	 * Reset a machine's TTL to `ttlSeconds` from now (omit for the server's
 	 * default; clamped like create). Returns the machine with its new expiry.
 	 */
-	readonly extendMachine: (id: string, ttlSeconds?: number) => Effect.Effect<Machine, BoringError>;
+	readonly extendMachine: (
+		id: string,
+		ttlSeconds?: number
+	) => Effect.Effect<Machine, NehemiahError>;
 	/**
 	 * Run one shell command in the machine and get `{output, exit_code}` back —
 	 * deterministic, no TTY. A 409 means the console is busy (another exec or an
@@ -167,27 +170,27 @@ export interface BoringClient {
 		id: string,
 		command: string,
 		opts?: ExecOptions
-	) => Effect.Effect<ExecResult, BoringError>;
+	) => Effect.Effect<ExecResult, NehemiahError>;
 	/** Open a serial console. The socket is closed when the enclosing `Scope` closes. */
 	readonly connectTty: (id: string) => Effect.Effect<TtyChannel, RequestError, Scope.Scope>;
 	/** Create a persistent volume (storage that outlives a machine). */
-	readonly createVolume: (ttlSeconds?: number) => Effect.Effect<Volume, BoringError>;
+	readonly createVolume: (ttlSeconds?: number) => Effect.Effect<Volume, NehemiahError>;
 	/** Fetch a volume's metadata + usage. */
-	readonly getVolume: (id: string) => Effect.Effect<Volume, BoringError>;
+	readonly getVolume: (id: string) => Effect.Effect<Volume, NehemiahError>;
 	/** Delete a volume and all its files. */
-	readonly deleteVolume: (id: string) => Effect.Effect<void, BoringError>;
+	readonly deleteVolume: (id: string) => Effect.Effect<void, NehemiahError>;
 	/** Save a machine's /root into a volume (attach on launch via createMachine). */
-	readonly saveMachine: (machineId: string, volumeId: string) => Effect.Effect<void, BoringError>;
+	readonly saveMachine: (machineId: string, volumeId: string) => Effect.Effect<void, NehemiahError>;
 }
 
-export const BoringClient = Context.GenericTag<BoringClient>('boring-computers-sdk/BoringClient');
+export const NehemiahClient = Context.GenericTag<NehemiahClient>('nehemiah-sdk/NehemiahClient');
 
-/** A `Layer` providing {@link BoringClient} from static options. */
-export const layer = (options: BoringClientOptions = {}): Layer.Layer<BoringClient> =>
-	Layer.succeed(BoringClient, make(options));
+/** A `Layer` providing {@link NehemiahClient} from static options. */
+export const layer = (options: NehemiahClientOptions = {}): Layer.Layer<NehemiahClient> =>
+	Layer.succeed(NehemiahClient, make(options));
 
-/** Build a {@link BoringClient} implementation directly (no layer). */
-export const make = (options: BoringClientOptions = {}): BoringClient => {
+/** Build a {@link NehemiahClient} implementation directly (no layer). */
+export const make = (options: NehemiahClientOptions = {}): NehemiahClient => {
 	const baseUrl = (options.baseUrl ?? 'http://localhost:8080').replace(/\/+$/, '');
 	const token = options.token;
 
@@ -197,7 +200,7 @@ export const make = (options: BoringClientOptions = {}): BoringClient => {
 		path: string,
 		schema: Schema.Schema<A> | null,
 		body?: unknown
-	): Effect.Effect<A, BoringError> =>
+	): Effect.Effect<A, NehemiahError> =>
 		Effect.gen(function* () {
 			const client = yield* HttpClient.HttpClient;
 			const url = `${baseUrl}${path}`;
@@ -232,7 +235,7 @@ export const make = (options: BoringClientOptions = {}): BoringClient => {
 	const retry = Schedule.exponential(Duration.millis(250)).pipe(
 		Schedule.intersect(Schedule.recurs(2)),
 		Schedule.whileInput(
-			(e: BoringError) =>
+			(e: NehemiahError) =>
 				e._tag === 'RequestError' || (e._tag === 'ResponseError' && e.status >= 500)
 		)
 	);

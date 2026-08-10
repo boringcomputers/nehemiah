@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Effect, Either } from 'effect';
-import { make, RequestError, ResponseError, type BoringError } from './index';
+import { make, RequestError, ResponseError, type NehemiahError } from './index';
 
 const MACHINE = {
 	id: 'm1',
@@ -64,7 +64,7 @@ function calledBody(n = 0): string {
 }
 
 /** Run an effect and return its failure, asserting it did fail. */
-async function failureOf<A>(effect: Effect.Effect<A, BoringError>): Promise<BoringError> {
+async function failureOf<A>(effect: Effect.Effect<A, NehemiahError>): Promise<NehemiahError> {
 	const either = await Effect.runPromise(Effect.either(effect));
 	if (Either.isRight(either)) throw new Error('expected effect to fail');
 	return either.left;

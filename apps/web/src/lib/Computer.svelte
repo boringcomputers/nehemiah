@@ -52,7 +52,7 @@
 			termHandle = await setupTerminal({
 				host: host!,
 				machineId: machine!.id,
-				bannerText: `\x1b[38;5;244mboring computers · ephemeral microVM · python3 + node ${net ? '· internet' : 'ready'}\x1b[0m\r\n`,
+				bannerText: `\x1b[38;5;244mNehemiah · ephemeral microVM · python3 + node ${net ? '· internet' : 'ready'}\x1b[0m\r\n`,
 				onClose: () => {
 					if (phase === 'live') {
 						termHandle?.term?.write('\r\n\x1b[38;5;244m— computer stopped —\x1b[0m\r\n');

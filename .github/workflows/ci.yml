@@ -7,17 +7,17 @@ on:
 
 jobs:
   go:
-    name: boringd (vet + build, amd64 + arm64)
+    name: nehemiahd (vet + build, amd64 + arm64)
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: boringd
+        working-directory: nehemiahd
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: boringd/go.mod
-          cache-dependency-path: boringd/go.sum
+          go-version-file: nehemiahd/go.mod
+          cache-dependency-path: nehemiahd/go.sum
       - run: go vet ./...
       - run: go build ./...
       # The infra ships to x86_64 and arm64 hosts (and the Mac/Lima local path
@@ -39,9 +39,9 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm run lint
-      - run: npm test -w boring-computers-sdk
+      - run: npm test -w nehemiah-sdk
       - run: npm test -w web
-      - run: npm run build -w boring-computers-sdk
+      - run: npm run build -w nehemiah-sdk
 
   shell:
     name: infra scripts (shellcheck)

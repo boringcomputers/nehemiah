@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// MCP server for boring computers. Lets any MCP client (Claude Desktop, Cursor,
+// MCP server for Nehemiah. Lets any MCP client (Claude Desktop, Cursor,
 // etc.) spin up and drive a real Linux computer: run tasks, take screenshots,
-// fork it, expose ports. Talks to YOUR boringd (self-hosted; no public endpoint).
+// fork it, expose ports. Talks to YOUR nehemiahd (self-hosted; no public endpoint).
 //
-//   BORING_URL=http://localhost:8080 node index.mjs
-//   (BORING_URL defaults to http://localhost:8080)
+//   NEHEMIAH_URL=http://localhost:8080 node index.mjs
+//   (NEHEMIAH_URL defaults to http://localhost:8080; legacy BORING_URL still works)
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -13,15 +13,16 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Effect } from "effect";
-import { make } from "boring-computers-sdk";
+import { make } from "nehemiah-sdk";
 
-const BASE = process.env.BORING_URL || "http://localhost:8080";
+const BASE =
+  process.env.NEHEMIAH_URL || process.env.BORING_URL || "http://localhost:8080";
 const WSBASE = BASE.replace(/^http/, "ws");
 const PREVIEW_HOST = new URL(BASE).host;
 
 // The MCP protocol layer is Promise-based; machine ops go through the Effect SDK,
 // run to a Promise at this boundary.
-const boring = make({ baseUrl: BASE });
+const nehemiah = make({ baseUrl: BASE });
 const run = (effect) => Effect.runPromise(effect);
 
 // Run a natural-language task via the terminal agent, collecting its narration.
@@ -249,7 +250,7 @@ async function dispatch(name, a) {
   switch (name) {
     case "launch_computer": {
       const m = await run(
-        boring.createMachine({
+        nehemiah.createMachine({
           template: a.template || "desktop",
           net: a.internet !== false,
           ttlSeconds: a.ttl_seconds || 600,
@@ -261,20 +262,20 @@ async function dispatch(name, a) {
       );
     }
     case "create_volume": {
-      const v = await run(boring.createVolume(a.ttl_seconds || undefined));
+      const v = await run(nehemiah.createVolume(a.ttl_seconds || undefined));
       return text(
         `Created volume ${v.id} (${v.quota_mb}MB). Save a computer into it with save_computer, then restore it by passing volume "${v.id}" to launch_computer.`,
       );
     }
     case "save_computer": {
-      await run(boring.saveMachine(a.id, a.volume));
+      await run(nehemiah.saveMachine(a.id, a.volume));
       return text(
         `Saved ${a.id} into volume ${a.volume}. Launch a new computer with that volume to restore it.`,
       );
     }
     case "run_command": {
       const r = await run(
-        boring.exec(
+        nehemiah.exec(
           a.id,
           a.command,
           a.timeout_seconds ? { timeoutSeconds: a.timeout_seconds } : undefined,
@@ -310,12 +311,12 @@ async function dispatch(name, a) {
     case "preview_url":
       return text(`https://${a.id}--${a.port}.${PREVIEW_HOST}/`);
     case "extend_computer": {
-      const m = await run(boring.extendMachine(a.id, a.ttl_seconds || 600));
+      const m = await run(nehemiah.extendMachine(a.id, a.ttl_seconds || 600));
       return text(`Extended ${m.id} — now self-destructs at ${m.expires_at}.`);
     }
     case "fork_computer": {
       const n = Math.max(1, a.count || 1);
-      const forks = await run(boring.branchMachines(a.id, n));
+      const forks = await run(nehemiah.branchMachines(a.id, n));
       if (forks.length === 1) {
         const f = forks[0];
         return text(
@@ -328,13 +329,13 @@ async function dispatch(name, a) {
       );
     }
     case "publish_computer": {
-      const t = await run(boring.publishMachine(a.id, a.name));
+      const t = await run(nehemiah.publishMachine(a.id, a.name));
       return text(
         `Published ${a.id} as template "${t.name}" (${t.size_mb ?? "?"}MB). Launch it any time: launch_computer with template "${t.name}" — boots your exact setup in milliseconds.`,
       );
     }
     case "list_templates": {
-      const ts = await run(boring.listTemplates);
+      const ts = await run(nehemiah.listTemplates);
       return text(
         ts
           .map(
@@ -345,13 +346,13 @@ async function dispatch(name, a) {
       );
     }
     case "list_computers": {
-      const arr = await run(boring.listMachines);
+      const arr = await run(nehemiah.listMachines);
       return text(
         arr.length ? JSON.stringify(arr, null, 2) : "No computers running.",
       );
     }
     case "stop_computer":
-      await run(boring.destroyMachine(a.id));
+      await run(nehemiah.destroyMachine(a.id));
       return text(`Stopped ${a.id}.`);
     default:
       throw new Error(`unknown tool ${name}`);
@@ -359,7 +360,7 @@ async function dispatch(name, a) {
 }
 
 const server = new Server(
-  { name: "boring-computers", version: "0.1.0" },
+  { name: "nehemiah", version: "0.1.0" },
   { capabilities: { tools: {} } },
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -377,4 +378,4 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 });
 
 await server.connect(new StdioServerTransport());
-console.error("boring-computers MCP server ready (endpoint: " + BASE + ")");
+console.error("Nehemiah MCP server ready (endpoint: " + BASE + ")");

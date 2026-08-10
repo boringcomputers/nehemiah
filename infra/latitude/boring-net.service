@@ -1,8 +1,8 @@
 [Unit]
-Description=boring computers guest networking (bridge, dnsmasq, NAT, egress firewall)
+Description=Nehemiah guest networking (bridge, dnsmasq, NAT, egress firewall)
 After=network-online.target dnsmasq.service
 Wants=network-online.target
-Before=boringd.service
+Before=nehemiahd.service
 
 [Service]
 Type=oneshot

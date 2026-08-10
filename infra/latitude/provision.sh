@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# provision.sh — create a Latitude.sh bare-metal box for boring computers, then
+# provision.sh — create a Latitude.sh bare-metal box for Nehemiah, then
 # tell you how to set it up. Optional convenience for Latitude users; if you have
 # a box anywhere else (Ubuntu 24.04 x86_64 + /dev/kvm), skip this and run
 # ../setup.sh directly.
@@ -12,7 +12,7 @@
 #     ./provision.sh
 #
 # Options (env): LATITUDE_PLAN (default c3-small-x86), LATITUDE_SITE (default MIA2),
-#   LATITUDE_OS (default ubuntu_24_04_x64_lts), LATITUDE_HOSTNAME (default boring-metal-01).
+#   LATITUDE_OS (default ubuntu_24_04_x64_lts), LATITUDE_HOSTNAME (default nehemiah-metal-01).
 #
 set -euo pipefail
 
@@ -26,7 +26,7 @@ USER_DATA="${LATITUDE_USER_DATA:-}"
 PLAN="${LATITUDE_PLAN:-c3-small-x86}"
 SITE="${LATITUDE_SITE:-MIA2}"
 OS="${LATITUDE_OS:-ubuntu_24_04_x64_lts}"
-HOST="${LATITUDE_HOSTNAME:-boring-metal-01}"
+HOST="${LATITUDE_HOSTNAME:-nehemiah-metal-01}"
 
 log() { printf '\033[1;34m[provision]\033[0m %s\n' "$*"; }
 
@@ -54,6 +54,6 @@ done
 log "Ready: ${HOST} = ${IP} (server ${ID})."
 echo
 echo "Next — set it up (from the repo root):"
-echo "  BORING_ANTHROPIC_KEY=sk-ant-... ./infra/setup.sh root@${IP}"
+echo "  NEHEMIAH_ANTHROPIC_KEY=sk-ant-... ./infra/setup.sh root@${IP}"
 echo
 echo "To delete it later (stops billing): ./infra/latitude/teardown.sh  (server_id ${ID})"

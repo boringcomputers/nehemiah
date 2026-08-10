@@ -11,7 +11,7 @@ import (
 // Machine ↔ volume bridge. A machine can restore a volume's snapshot into /root
 // on boot ("attach") and write /root back to the volume ("save"), so work
 // survives the machine's self-destruct. The master S3 credentials never touch
-// the guest — boringd streams the tarball through the same node-helper channel
+// the guest — nehemiahd streams the tarball through the same node-helper channel
 // used for file transfer. Both flows need a connected machine (desktop or a
 // shell with net).
 

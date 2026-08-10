@@ -54,7 +54,7 @@
 	];
 	let ttl = $state(300);
 	// Keep-alive: no auto-shutdown, runs until you close it. Honored only when the
-	// server has BORING_ALLOW_PERSISTENT=1; otherwise it falls back to the TTL.
+	// server has NEHEMIAH_ALLOW_PERSISTENT=1; otherwise it falls back to the TTL.
 	let persistent = $state(false);
 
 	const PRODUCTS = [
@@ -331,7 +331,7 @@
 			class="flex flex-col gap-6 border-t border-line pt-10 sm:flex-row sm:items-center sm:justify-between"
 		>
 			<div>
-				<div class="font-semibold text-ink">boring computers</div>
+				<div class="font-semibold text-ink">Nehemiah</div>
 				<div class="mt-1 font-mono text-[12px] text-ink-faint">
 					Computers that are refreshingly boring.
 				</div>

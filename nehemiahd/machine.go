@@ -21,7 +21,7 @@ var (
 	ErrRateLimited         = errors.New("rate limit exceeded for your address")
 )
 
-// Machine is a single running microVM plus the bookkeeping boringd needs to
+// Machine is a single running microVM plus the bookkeeping nehemiahd needs to
 // manage its lifecycle. The exported time/id fields are stable; runtime handles
 // (console, driver) are internal.
 type Machine struct {
@@ -35,7 +35,7 @@ type Machine struct {
 	ExpiresAt time.Time
 
 	// Persistent machines have no TTL: no reap timer is armed, so they run until
-	// explicitly deleted (or boringd restarts). Gated by cfg.AllowPersistent.
+	// explicitly deleted (or nehemiahd restarts). Gated by cfg.AllowPersistent.
 	Persistent bool
 
 	// ParentID is set on forks: the machine this one was branched from.

@@ -1,14 +1,14 @@
 {
-	"name": "boring-computers-sdk",
+	"name": "nehemiah-sdk",
 	"version": "0.1.0",
-	"description": "Effect-native TypeScript client for boring computers — on-demand Firecracker microVMs you can hand to an AI.",
+	"description": "Effect-native TypeScript client for Nehemiah — on-demand Firecracker microVMs you can hand to an AI.",
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/michaelshimeles/boring-computers.git",
+		"url": "git+https://github.com/boringcomputers/nehemiah.git",
 		"directory": "packages/sdk"
 	},
-	"homepage": "https://github.com/michaelshimeles/boring-computers#readme",
+	"homepage": "https://github.com/boringcomputers/nehemiah#readme",
 	"keywords": [
 		"firecracker",
 		"microvm",
@@ -30,7 +30,7 @@
 		"dist",
 		"README.md"
 	],
-	"prettier": "@boring/prettier-config",
+	"prettier": "@nehemiah/prettier-config",
 	"scripts": {
 		"check": "tsc --noEmit",
 		"build": "tsc",
@@ -45,8 +45,8 @@
 	},
 	"devDependencies": {
 		"typescript": "^6.0.3",
-		"@boring/typescript-config": "*",
-		"@boring/prettier-config": "*",
+		"@nehemiah/typescript-config": "*",
+		"@nehemiah/prettier-config": "*",
 		"@types/node": "^24",
 		"vitest": "^4.1.8"
 	}

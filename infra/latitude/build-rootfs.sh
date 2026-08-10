@@ -6,7 +6,7 @@
 #   * ~512MB ext4 image
 #   * Alpine minirootfs (busybox init) with python3 installed
 #   * /etc/inittab that boots an interactive /bin/sh on ttyS0 and prints
-#     the "BORING_READY" marker (required by boringd for boot_ms timing)
+#     the "NEHEMIAH_READY" marker (required by nehemiahd for boot_ms timing)
 #
 # Run as root. Idempotent: rebuilds the image from scratch each run.
 #
@@ -15,8 +15,8 @@ set -euo pipefail
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
-BORING_ROOT="/opt/boring"
-ROOTFS_DIR="${BORING_ROOT}/rootfs"
+NEHEMIAH_ROOT="/opt/boring"
+ROOTFS_DIR="${NEHEMIAH_ROOT}/rootfs"
 IMG="${ROOTFS_DIR}/rootfs.ext4"
 IMG_SIZE_MB="${IMG_SIZE_MB:-1280}"   # room for the Claude Code CLI
 
@@ -132,7 +132,7 @@ umount "${MNT}/sys"  2>/dev/null || true
 umount "${MNT}/dev"  2>/dev/null || true
 
 # --------------------------------------------------------------------------
-# 5. inittab - busybox init reads this. BORING_READY marker is REQUIRED.
+# 5. inittab - busybox init reads this. NEHEMIAH_READY marker is REQUIRED.
 # --------------------------------------------------------------------------
 log "Writing /etc/inittab..."
 cat > "${MNT}/etc/inittab" <<'INITTAB_EOF'
@@ -140,7 +140,7 @@ cat > "${MNT}/etc/inittab" <<'INITTAB_EOF'
 ::sysinit:/bin/mount -t sysfs sysfs /sys
 ::sysinit:/bin/mount -t devtmpfs devtmpfs /dev
 ::sysinit:/bin/hostname boring
-::sysinit:/bin/sh -c 'echo BORING_READY > /dev/ttyS0'
+::sysinit:/bin/sh -c 'echo NEHEMIAH_READY > /dev/ttyS0'
 ttyS0::respawn:/bin/sh -l
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/bin/umount -a -r

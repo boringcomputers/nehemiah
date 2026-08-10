@@ -1,15 +1,15 @@
 {
-	"name": "@boring/prettier-config",
-	"version": "0.0.0",
-	"private": true,
-	"type": "module",
-	"main": "index.js",
-	"exports": "./index.js",
-	"dependencies": {
-		"prettier-plugin-svelte": "^4.1.0",
-		"prettier-plugin-tailwindcss": "^0.8.0"
-	},
-	"peerDependencies": {
-		"prettier": ">=3"
-	}
+  "name": "@nehemiah/prettier-config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "dependencies": {
+    "prettier-plugin-svelte": "^4.1.0",
+    "prettier-plugin-tailwindcss": "^0.8.0"
+  },
+  "peerDependencies": {
+    "prettier": ">=3"
+  }
 }

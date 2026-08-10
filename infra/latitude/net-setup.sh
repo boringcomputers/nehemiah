@@ -2,7 +2,7 @@
 #
 # net-setup.sh - Host networking for guest internet egress (idempotent).
 #
-# Creates a bridge (boring0, 10.200.0.1/24) that boringd attaches per-VM taps to,
+# Creates a bridge (boring0, 10.200.0.1/24) that nehemiahd attaches per-VM taps to,
 # runs dnsmasq for DHCP + DNS on it, NATs guest traffic out the uplink, and
 # installs a strict EGRESS FIREWALL. This box runs untrusted public code, so the
 # firewall must hold: guests may reach the public internet, but NOT the cloud
@@ -35,7 +35,7 @@ cat > /etc/dnsmasq.d/boring.conf <<EOF
 interface=${BR}
 bind-interfaces
 except-interface=lo
-# .200-.250 is reserved for statically-addressed forks (boringd assigns those).
+# .200-.250 is reserved for statically-addressed forks (nehemiahd assigns those).
 dhcp-range=${SUBNET}.10,${SUBNET}.199,255.255.255.0,1h
 dhcp-option=option:router,${SUBNET}.1
 dhcp-option=option:dns-server,${SUBNET}.1
@@ -65,24 +65,24 @@ iptables -C INPUT -i "$BR" -j DROP 2>/dev/null \
   || iptables -A INPUT -i "$BR" -j DROP
 
 # --- FORWARD: the egress firewall ------------------------------------------
-iptables -N BORING_FWD 2>/dev/null || true
-iptables -C FORWARD -j BORING_FWD 2>/dev/null || iptables -I FORWARD -j BORING_FWD
-iptables -F BORING_FWD
+iptables -N NEHEMIAH_FWD 2>/dev/null || true
+iptables -C FORWARD -j NEHEMIAH_FWD 2>/dev/null || iptables -I FORWARD -j NEHEMIAH_FWD
+iptables -F NEHEMIAH_FWD
 # return traffic to guests
-iptables -A BORING_FWD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A NEHEMIAH_FWD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # only guest-sourced traffic is filtered below; anything else falls through
-iptables -A BORING_FWD ! -s "$CIDR" -j RETURN
+iptables -A NEHEMIAH_FWD ! -s "$CIDR" -j RETURN
 # block the cloud metadata endpoint + private/link-local/loopback + guest↔guest
 for net in 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 100.64.0.0/10; do
-  iptables -A BORING_FWD -s "$CIDR" -d "$net" -j DROP
+  iptables -A NEHEMIAH_FWD -s "$CIDR" -d "$net" -j DROP
 done
 # no spam
-iptables -A BORING_FWD -s "$CIDR" -p tcp --dport 25 -j DROP
+iptables -A NEHEMIAH_FWD -s "$CIDR" -p tcp --dport 25 -j DROP
 # cap new-connection rate per guest (anti-scan / anti-abuse)
-iptables -A BORING_FWD -s "$CIDR" -p tcp --syn \
+iptables -A NEHEMIAH_FWD -s "$CIDR" -p tcp --syn \
   -m hashlimit --hashlimit-above 80/sec --hashlimit-burst 120 \
   --hashlimit-mode srcip --hashlimit-name boringrate -j DROP
 # everything else out to the public internet is allowed
-iptables -A BORING_FWD -s "$CIDR" -j ACCEPT
+iptables -A NEHEMIAH_FWD -s "$CIDR" -j ACCEPT
 log "egress firewall installed (metadata + private + SMTP blocked, rate-capped)"
 log "done."

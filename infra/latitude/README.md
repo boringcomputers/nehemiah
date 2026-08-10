@@ -1,7 +1,7 @@
-# boring computers — Latitude.sh runbook
+# Nehemiah — Latitude.sh runbook
 
 This is the operator runbook for the one-box prototype: a single Latitude.sh
-bare-metal server running **boringd**, which launches **Firecracker microVMs** you
+bare-metal server running **nehemiahd**, which launches **Firecracker microVMs** you
 can create over REST and drive with a live shell over WebSocket.
 
 - **Server:** `c3.small.x86` @ **MIA2** (Miami), Ubuntu 24.04 x86_64, 6 cores / 32 GB, `/dev/kvm` present.
@@ -21,7 +21,7 @@ Create `~/.config/latitude/server.env`:
 # ~/.config/latitude/server.env  (chmod 600 — do NOT commit)
 SERVER_IP=203.0.113.10             # public IPv4 of the box
 SSH_KEY=/Users/you/.ssh/latitude   # private key that can root@ the box
-BORING_TOKEN=                      # optional bearer token for /v1/* (leave empty for tunnel-only)
+NEHEMIAH_TOKEN=                      # optional bearer token for /v1/* (leave empty for tunnel-only)
 
 # for teardown.sh (billing):
 LATITUDE_API_KEY=...               # or put it in ~/.config/latitude/api_key
@@ -36,8 +36,8 @@ All scripts here `source` this file. The API key is never printed.
 
 `bootstrap.sh` (owned separately, run **on the box**) installs the Go toolchain,
 downloads the Firecracker binary, an uncompressed guest kernel, and builds the
-Alpine rootfs with `python3` + the `BORING_READY` serial marker. It lays down the
-fixed host paths boringd expects:
+Alpine rootfs with `python3` + the `NEHEMIAH_READY` serial marker. It lays down the
+fixed host paths nehemiahd expects:
 
 ```
 /opt/boring/bin/firecracker         firecracker (also jailer)
@@ -58,7 +58,7 @@ Sanity check on the box: `ls -la /dev/kvm` and `/opt/boring/bin/firecracker --ve
 
 ---
 
-## 2. Deploy boringd
+## 2. Deploy nehemiahd
 
 From the repo root on your laptop:
 
@@ -66,19 +66,19 @@ From the repo root on your laptop:
 infra/latitude/deploy.sh
 ```
 
-This rsyncs `boringd/` to `/opt/boring/src/`, builds a static binary to
-`/usr/local/bin/boringd`, installs `boringd.service`, writes
-`/etc/boring/boringd.env` (with `BORING_TOKEN` if you set one), enables the
+This rsyncs `nehemiahd/` to `/opt/boring/src/`, builds a static binary to
+`/usr/local/bin/nehemiahd`, installs `nehemiahd.service`, writes
+`/etc/boring/nehemiahd.env` (with `NEHEMIAH_TOKEN` if you set one), enables the
 service, and curls `localhost:8080/healthz` to confirm. Re-run any time to ship
 a new build.
 
-Logs: `ssh -i "$SSH_KEY" root@$SERVER_IP journalctl -u boringd -f`
+Logs: `ssh -i "$SSH_KEY" root@$SERVER_IP journalctl -u nehemiahd -f`
 
 ---
 
 ## 3. Open the tunnel
 
-boringd binds `0.0.0.0:8080` on the box but is **firewalled to localhost only**
+nehemiahd binds `0.0.0.0:8080` on the box but is **firewalled to localhost only**
 (see [SECURITY](#security)). Reach it from your laptop over SSH:
 
 ```sh
@@ -94,9 +94,9 @@ Leave it running. Verify: `curl http://localhost:8080/healthz` → `{"ok":true,.
 In another terminal, from the repo root:
 
 ```sh
-BORING_URL=http://localhost:8080 node packages/sdk/demo.mjs
+NEHEMIAH_URL=http://localhost:8080 node packages/sdk/demo.mjs
 # if you set a token:
-BORING_URL=http://localhost:8080 BORING_TOKEN=... node packages/sdk/demo.mjs
+NEHEMIAH_URL=http://localhost:8080 NEHEMIAH_TOKEN=... node packages/sdk/demo.mjs
 ```
 
 The demo exercises the full contract:
@@ -127,7 +127,7 @@ POST   /v1/machines/{id}/branch      -> 201 <machine> | 501
 GET    /v1/machines/{id}/tty         -> WebSocket, BINARY frames both ways (serial stdin/stdout)
 ```
 
-Auth: if `BORING_TOKEN` is set, send `Authorization: Bearer <token>` on `/v1/*`
+Auth: if `NEHEMIAH_TOKEN` is set, send `Authorization: Bearer <token>` on `/v1/*`
 (the WebSocket also accepts `?token=<token>`). `/healthz` is always open.
 
 ---
@@ -155,21 +155,21 @@ Current posture (prototype):
 
 - **Bound to localhost / SSH tunnel only.** Do **not** expose `:8080` publicly.
   Keep the box firewalled (e.g. `ufw` default-deny inbound except `22`).
-- **Set a `BORING_TOKEN`** even behind the tunnel as defense-in-depth.
+- **Set a `NEHEMIAH_TOKEN`** even behind the tunnel as defense-in-depth.
 - Firecracker already gives you a KVM hardware boundary + minimal device model —
   much stronger isolation than containers.
 
 **Hardening TODO before any public exposure (not done yet):**
 
 - **jailer** — run each firecracker under `jailer` (chroot, `cgroups`, `pid`/`net`
-  namespaces, drop to an unprivileged uid). Today boringd runs firecracker as root.
+  namespaces, drop to an unprivileged uid). Today nehemiahd runs firecracker as root.
 - **seccomp** — enforce firecracker's seccomp filters (advanced/custom profile),
-  and confine boringd itself.
+  and confine nehemiahd itself.
 - **egress limits** — the demo skips guest networking entirely. If/when you add a
   tap per VM, put the guest behind a default-deny NAT with strict egress
   allow-lists and per-VM rate limits; block link-local/metadata ranges.
 - **resource caps** — enforce vCPU/mem/disk quotas (already 1 vCPU / 256 MiB /
-  overlay per VM), plus `BORING_MAX` (default 20) and TTLs (15–900 s) to bound blast radius.
+  overlay per VM), plus `NEHEMIAH_MAX` (default 20) and TTLs (15–900 s) to bound blast radius.
 - **rootfs is copy-on-write per VM** (`cp --reflink=auto`) so tenants can't corrupt
   the base image, and VMs are destroyed on TTL/DELETE.
 
@@ -183,7 +183,7 @@ only through the SSH tunnel.
 - **Server:** `c3.small.x86` @ MIA2 ≈ **$0.52 / hr**
   - ≈ **$12.48 / day**
   - ≈ **$375 / month** if left running 24×7.
-- Billing is **hourly while the server exists** — it accrues whether or not boringd
+- Billing is **hourly while the server exists** — it accrues whether or not nehemiahd
   is running or any VMs are up. The only way to stop it is `teardown.sh` (delete
   the server).
 - microVMs themselves are free (they're just processes on the box); the cost is the
@@ -195,10 +195,10 @@ only through the SSH tunnel.
 
 ## Files in this directory
 
-| File | Purpose |
-|------|---------|
-| `deploy.sh` | Build & deploy boringd to the box; install/enable systemd unit; health-check. |
-| `tunnel.sh` | SSH tunnel `localhost:8080 → box:8080` for running the demo. |
-| `teardown.sh` | Delete the Latitude server via API to stop billing (confirmation required). |
-| `boringd.service` | systemd unit installed on the box by `deploy.sh`. |
-| `README.md` | This runbook. |
+| File                | Purpose                                                                         |
+| ------------------- | ------------------------------------------------------------------------------- |
+| `deploy.sh`         | Build & deploy nehemiahd to the box; install/enable systemd unit; health-check. |
+| `tunnel.sh`         | SSH tunnel `localhost:8080 → box:8080` for running the demo.                    |
+| `teardown.sh`       | Delete the Latitude server via API to stop billing (confirmation required).     |
+| `nehemiahd.service` | systemd unit installed on the box by `deploy.sh`.                               |
+| `README.md`         | This runbook.                                                                   |

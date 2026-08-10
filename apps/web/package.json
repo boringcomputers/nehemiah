@@ -17,9 +17,9 @@
 		"test:e2e": "playwright install && playwright test"
 	},
 	"devDependencies": {
-		"@boring/eslint-config": "*",
-		"@boring/prettier-config": "*",
-		"@boring/typescript-config": "*",
+		"@nehemiah/eslint-config": "*",
+		"@nehemiah/prettier-config": "*",
+		"@nehemiah/typescript-config": "*",
 		"@playwright/test": "^1.60.0",
 		"@sveltejs/adapter-vercel": "^6.3.3",
 		"@sveltejs/kit": "^2.63.0",

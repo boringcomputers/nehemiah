@@ -1,25 +1,25 @@
 {
-	"name": "boring-computers",
-	"private": true,
-	"version": "0.0.1",
-	"license": "Apache-2.0",
-	"type": "module",
-	"workspaces": [
-		"apps/*",
-		"packages/*"
-	],
-	"scripts": {
-		"build": "turbo run build",
-		"dev": "turbo run dev",
-		"preview": "turbo run preview",
-		"lint": "turbo run lint",
-		"check": "turbo run check",
-		"format": "turbo run format",
-		"test": "turbo run test",
-		"dev:demo": "bash infra/latitude/dev-demo.sh"
-	},
-	"devDependencies": {
-		"turbo": "^2.5.0"
-	},
-	"packageManager": "npm@11.16.0"
+  "name": "nehemiah",
+  "private": true,
+  "version": "0.0.1",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "preview": "turbo run preview",
+    "lint": "turbo run lint",
+    "check": "turbo run check",
+    "format": "turbo run format",
+    "test": "turbo run test",
+    "dev:demo": "bash infra/latitude/dev-demo.sh"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  },
+  "packageManager": "npm@11.16.0"
 }

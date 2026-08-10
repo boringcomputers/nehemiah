@@ -1,5 +1,5 @@
 {
-	"extends": "@boring/typescript-config/base.json",
+	"extends": "@nehemiah/typescript-config/base.json",
 	"compilerOptions": {
 		"module": "NodeNext",
 		"moduleResolution": "nodenext",

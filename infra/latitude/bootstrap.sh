@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # bootstrap.sh - Provision a fresh Ubuntu 24.04 (x86_64 or aarch64) host for the
-#                "boring computers" Firecracker microVM sandbox.
+#                "Nehemiah" Firecracker microVM sandbox.
 #
 # Run as root on the target box:
 #     sudo bash infra/latitude/bootstrap.sh
@@ -14,13 +14,13 @@ set -euo pipefail
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
-BORING_ROOT="/opt/boring"
-BIN_DIR="${BORING_ROOT}/bin"
-KERNEL_DIR="${BORING_ROOT}/kernel"
+NEHEMIAH_ROOT="/opt/boring"
+BIN_DIR="${NEHEMIAH_ROOT}/bin"
+KERNEL_DIR="${NEHEMIAH_ROOT}/kernel"
 KERNEL_PATH="${KERNEL_DIR}/vmlinux"
-ROOTFS_DIR="${BORING_ROOT}/rootfs"
-RUN_DIR="${BORING_ROOT}/run"
-TEMPLATE_DIR="${BORING_ROOT}/templates"
+ROOTFS_DIR="${NEHEMIAH_ROOT}/rootfs"
+RUN_DIR="${NEHEMIAH_ROOT}/run"
+TEMPLATE_DIR="${NEHEMIAH_ROOT}/templates"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -99,11 +99,11 @@ fi
 # --------------------------------------------------------------------------
 # 3. Directory layout
 # --------------------------------------------------------------------------
-log "Creating ${BORING_ROOT} layout..."
+log "Creating ${NEHEMIAH_ROOT} layout..."
 mkdir -p "${BIN_DIR}" "${KERNEL_DIR}" "${ROOTFS_DIR}" "${RUN_DIR}" "${TEMPLATE_DIR}"
 
 # Jailer prerequisites: the chroot base + the unprivileged uid/gid the jailer
-# drops firecracker into (BORING_JAILER=1). Without these, jailed boots fail with
+# drops firecracker into (NEHEMIAH_JAILER=1). Without these, jailed boots fail with
 # "Canonicalize(/srv/jailer)" / "fc.sock did not appear".
 mkdir -p /srv/jailer
 groupadd -g 991 boringjail 2>/dev/null || true
@@ -222,7 +222,7 @@ bash "${SCRIPT_DIR}/build-rootfs.sh"
 cat <<BANNER
 
 ============================================================================
-  boring computers box bootstrap COMPLETE
+  Nehemiah box bootstrap COMPLETE
 ----------------------------------------------------------------------------
   firecracker : $("${BIN_DIR}/firecracker" --version 2>/dev/null | head -n1)
   jailer      : $([ -x "${BIN_DIR}/jailer" ] && "${BIN_DIR}/jailer" --version 2>/dev/null | head -n1 || echo "(not installed)")
@@ -234,11 +234,11 @@ cat <<BANNER
   NEXT STEPS:
     1. (optional) Build the python snapshot template:
          sudo bash ${SCRIPT_DIR}/build-template.sh python
-    2. Deploy the boringd binary to /usr/local/bin/boringd
-    3. (optional) Set a token:  echo 'BORING_TOKEN=...' > /etc/boring/boringd.env
+    2. Deploy the nehemiahd binary to /usr/local/bin/nehemiahd
+    3. (optional) Set a token:  echo 'NEHEMIAH_TOKEN=...' > /etc/boring/nehemiahd.env
     4. Install the service:
-         install -m0644 ${SCRIPT_DIR}/boringd.service /etc/systemd/system/boringd.service
-         systemctl daemon-reload && systemctl enable --now boringd
+         install -m0644 ${SCRIPT_DIR}/nehemiahd.service /etc/systemd/system/nehemiahd.service
+         systemctl daemon-reload && systemctl enable --now nehemiahd
     5. Verify:  curl -s http://localhost:8080/healthz | jq
 ============================================================================
 

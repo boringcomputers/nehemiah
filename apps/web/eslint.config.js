@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { defineConfig, includeIgnoreFile } from 'eslint/config';
-import { svelteConfig } from '@boring/eslint-config/svelte';
+import { svelteConfig } from '@nehemiah/eslint-config/svelte';
 
 const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
 

@@ -1,4 +1,4 @@
-# boring computers — architecture & thesis
+# Nehemiah — architecture & thesis
 
 ## Thesis
 
@@ -44,6 +44,7 @@ and stateful in a way per-request containers can't match.
 What we own vs. what we rent, and what migrates over time.
 
 **OWN (the core — build and keep):**
+
 - microVM lifecycle (Firecracker driver, serial-over-stdio transport)
 - scheduler / placement across hosts
 - snapshots (template capture + restore)
@@ -53,35 +54,38 @@ What we own vs. what we rent, and what migrates over time.
 - the SDK (the developer surface)
 
 **WRAP — keep (best-in-class, no reason to build):**
+
 - **R2** — object storage for images/snapshots/artifacts
-- **Cloudflare edge** — CDN, DNS, DDoS, WAF in front of the control plane
+- **Cloudflare edge** — CDN, DNS, DDoS, WAF in front of Nehemiah
 - **Clerk** — auth / orgs / API keys
 - **Stripe** — billing & metering
-- **Neon** — Postgres control-plane database
+- **Neon** — Postgres database behind Nehemiah
 - **OTel** — tracing / metrics / logs
 
 **WRAP now, OWN later (strategic, migrate when scale justifies):**
+
 - **compute substrate** — start on rented bare metal; grow toward owned/colocated
   hardware as unit economics and demand harden.
 - **inference gateway** — wrap a provider/router first; pull it in-house as
   co-location and routing become a differentiator.
 
 **RENT (commodity, never own):**
+
 - **Latitude.sh bare metal** — the physical hosts. Interchangeable capacity.
 
 ## One-box prototype
 
 Everything below runs on a **single Latitude.sh `c3.small.x86` in MIA2** (Ubuntu
 24.04, 6 cores / 32 GB, `/dev/kvm`). The SvelteKit hero site is on Vercel; the
-browser talks to boringd over an SSH-tunneled WebSocket.
+browser talks to nehemiahd over an SSH-tunneled WebSocket.
 
 ```
    ┌──────────────┐         ┌────────────────────────────────────────────────────────┐
    │  Browser     │         │  Latitude.sh c3.small.x86  @ MIA2  (Ubuntu 24.04, /dev/kvm) │
    │  (operator)  │         │                                                        │
-   └──────┬───────┘         │   ┌──────────────── boringd (:8080) ────────────────┐  │
-          │ HTTPS           │   │  REST control plane + /tty WebSocket bridge      │  │
-          ▼                 │   │  registry (sync.Mutex) · TTL reaper · BORING_MAX │  │
+   └──────┬───────┘         │   ┌──────────────── nehemiahd (:8080) ────────────────┐  │
+          │ HTTPS           │   │  REST host API + /tty WebSocket bridge           │  │
+          ▼                 │   │  registry (sync.Mutex) · TTL reaper · NEHEMIAH_MAX │  │
    ┌──────────────┐  WS/HTTP│   └───┬───────────────┬───────────────┬─────────────┘  │
    │ Vercel hero  │  (SSH   │       │ stdin/stdout  │ stdin/stdout  │ stdin/stdout   │
    │ site (Svelte)│  tunnel)│       │ (serial)      │ (serial)      │ (serial)       │
@@ -104,16 +108,16 @@ browser talks to boringd over an SSH-tunneled WebSocket.
 
 ### How the shell works (serial-over-stdio)
 
-Each Machine is one `firecracker` child process that boringd owns:
+Each Machine is one `firecracker` child process that nehemiahd owns:
 
 ```
 firecracker --api-sock /opt/boring/run/<id>.sock --id <id>
 ```
 
 The guest kernel boots with `console=ttyS0`, wiring the guest serial console to
-firecracker's **stdio**. boringd owns that child's stdin/stdout pipes, so:
+firecracker's **stdio**. nehemiahd owns that child's stdin/stdout pipes, so:
 
-- bytes boringd writes to child **STDIN** → land on guest `/dev/ttyS0` (shell input)
+- bytes nehemiahd writes to child **STDIN** → land on guest `/dev/ttyS0` (shell input)
 - bytes the child writes to **STDOUT** → are the guest serial console (shell output)
 
 The `/v1/machines/{id}/tty` WebSocket is just a byte pump between the client and
@@ -129,19 +133,19 @@ cold-boot and snapshot-restored VMs**, which is why it's the guaranteed path.
    `PUT /boot-source`, `PUT /drives/rootfs`, `PUT /machine-config`
    (1 vCPU / 256 MiB), then `PUT /actions {InstanceStart}`.
 4. `boot_ms` = wall-clock from just-before-`InstanceStart` until the guest prints
-   the `BORING_READY` marker on serial. Pre- and post-marker bytes are buffered so
+   the `NEHEMIAH_READY` marker on serial. Pre- and post-marker bytes are buffered so
    the `/tty` client still gets the full scrollback.
 5. Register the machine; start a TTL timer (`ttl_seconds`, default 120, clamped
    15–900). On expiry/DELETE: SIGKILL the child (+ best-effort `SendCtrlAltDel`),
    remove the sock + overlay (+ tap if any), drop it from the registry.
 
-Concurrency: the registry is guarded by a `sync.Mutex`; `BORING_MAX` (default 20)
+Concurrency: the registry is guarded by a `sync.Mutex`; `NEHEMIAH_MAX` (default 20)
 caps live machines and returns `429` when full. Guest networking is intentionally
 skipped in v1 — the serial shell needs none, so nothing blocks VM creation.
 
 ### Control-plane contract
 
-boringd listens on `0.0.0.0:8080`. If `BORING_TOKEN` is set, `/v1/*` requires
+nehemiahd listens on `0.0.0.0:8080`. If `NEHEMIAH_TOKEN` is set, `/v1/*` requires
 `Authorization: Bearer <token>` (the `/tty` WebSocket also accepts `?token=`);
 `/healthz` is always open.
 

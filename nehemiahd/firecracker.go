@@ -19,7 +19,7 @@ import (
 
 // readinessMarker is printed by the guest rootfs on the serial console right
 // before it starts the interactive shell. boot_ms is measured up to this point.
-const readinessMarker = "BORING_READY"
+const readinessMarker = "NEHEMIAH_READY"
 
 // scrollbackCap bounds the retained serial scrollback replayed to new clients.
 const scrollbackCap = 256 * 1024
@@ -257,7 +257,7 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 			"--chroot-base-dir", cfg.ChrootBase,
 		}
 		// Have the jailer create a child cgroup (with resource caps) inside
-		// boringd's delegated subtree. Passing --cgroup makes jailer create a
+		// nehemiahd's delegated subtree. Passing --cgroup makes jailer create a
 		// child cgroup named after the id rather than joining the parent directly.
 		if parent := jailerParentCgroup(); parent != "" {
 			mem := tpl.MemSizeMB
@@ -340,7 +340,7 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 			}
 			d.tap = tap
 		}
-		// A restored guest resumes past the BORING_READY marker (it already
+		// A restored guest resumes past the NEHEMIAH_READY marker (it already
 		// printed it before being snapshotted), so we time the restore call
 		// itself rather than waiting for a marker that will never reappear.
 		t := time.Now()
