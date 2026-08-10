@@ -32,6 +32,21 @@ type lockedFrameWriter struct {
 	setWriteDeadline func(time.Time) error
 	ctx              context.Context
 	cancel           context.CancelFunc
+	terminalSent     bool
+}
+
+// sendTerminal sends a terminal frame (an error or a result) at most once, so a
+// session has exactly one terminal outcome. A control-frame error and the final
+// result must not both reach the client for the same operation.
+func (w *lockedFrameWriter) sendTerminal(f protocolFrame) error {
+	w.mu.Lock()
+	if w.terminalSent {
+		w.mu.Unlock()
+		return nil
+	}
+	w.terminalSent = true
+	w.mu.Unlock()
+	return w.send(f)
 }
 
 func (w *lockedFrameWriter) send(f protocolFrame) error {
@@ -160,7 +175,7 @@ func (s *agentServer) runPiped(ctx context.Context, cancel context.CancelFunc, c
 	close(done)
 
 	code, timedOut := commandResult(ctx, waitErr)
-	_ = w.send(protocolFrame{Type: frameResult, ExitCode: &code, TimedOut: timedOut, Truncated: budget.wasTruncated()})
+	_ = w.sendTerminal(protocolFrame{Type: frameResult, ExitCode: &code, TimedOut: timedOut, Truncated: budget.wasTruncated()})
 }
 
 func streamOutput(wg *sync.WaitGroup, r io.Reader, frameType string, w *lockedFrameWriter, budget *outputBudget) {

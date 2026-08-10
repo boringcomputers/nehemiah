@@ -145,3 +145,52 @@ func TestTTYOverflowReleasesWhileClientNotReading(t *testing.T) {
 		t.Fatal("session did not release after input overflow while the client stopped reading responses")
 	}
 }
+
+// TestTTYOverflowEmitsSingleTerminalFrame is the regression for the contradictory
+// terminal-outcome finding: on input overflow the session must emit exactly one
+// terminal frame (the error), never an error followed by a result for the same
+// operation.
+func TestTTYOverflowEmitsSingleTerminalFrame(t *testing.T) {
+	conn, done := startTestConn(t)
+	defer conn.Close()
+
+	if err := writeFrame(conn, protocolFrame{Version: protocolVersion, Type: frameTTY, Rows: 30, Cols: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if ready, err := readFrame(conn); err != nil || ready.Type != frameTTYReady {
+		t.Fatalf("terminal handshake = %#v (err %v)", ready, err)
+	}
+	if err := writeFrame(conn, protocolFrame{Type: frameStdin, Data: []byte("sleep 30\n")}); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		payload := make([]byte, 4096)
+		for i := 0; i < 500; i++ {
+			if err := writeFrame(conn, protocolFrame{Type: frameStdin, Data: payload}); err != nil {
+				return
+			}
+		}
+	}()
+
+	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+	var sawError, sawResult bool
+	for {
+		f, err := readFrame(conn)
+		if err != nil {
+			break // conn closed after the single terminal frame
+		}
+		switch f.Type {
+		case frameError:
+			sawError = true
+		case frameResult:
+			sawResult = true
+		}
+	}
+	if !sawError {
+		t.Fatal("expected a terminal error frame on input overflow")
+	}
+	if sawResult {
+		t.Fatal("received both an error and a result frame for one terminal session")
+	}
+	<-done
+}

@@ -67,7 +67,7 @@ func (s *agentServer) serveTTY(conn net.Conn, req protocolFrame) {
 	_ = master.Close()
 	reader.Wait()
 	code, _ := commandResult(ctx, waitErr)
-	_ = w.send(protocolFrame{Type: frameResult, ExitCode: &code})
+	_ = w.sendTerminal(protocolFrame{Type: frameResult, ExitCode: &code})
 }
 
 const ttyStdinBufferedFrames = 64
@@ -153,7 +153,7 @@ func watchTTYControlFrames(conn net.Conn, cancel context.CancelFunc, master *os.
 			// Cancel first: the best-effort error frame must never delay teardown
 			// if the client has stopped reading responses.
 			cancel()
-			_ = w.send(protocolFrame{Type: frameError, Code: "invalid_tty_frame", Error: err.Error()})
+			_ = w.sendTerminal(protocolFrame{Type: frameError, Code: "invalid_tty_frame", Error: err.Error()})
 			return
 		}
 		if frame.Type == frameCancel {
@@ -235,7 +235,7 @@ func (s *agentServer) runPTY(ctx context.Context, cancel context.CancelFunc, con
 			if err := pump.enqueue(f.Data); err != nil {
 				// Cancel first so a client that stopped reading cannot delay teardown.
 				cancel()
-				_ = w.send(protocolFrame{Type: frameError, Code: "tty_input_overflow", Error: err.Error()})
+				_ = w.sendTerminal(protocolFrame{Type: frameError, Code: "tty_input_overflow", Error: err.Error()})
 			}
 		case frameResize:
 			_ = setPTYSize(master, f.Rows, f.Cols)
