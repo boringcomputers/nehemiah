@@ -11,7 +11,7 @@ import (
 // refillPool boots warm desktops in the background until the target is met,
 // without exceeding MaxMachines. Safe to call often.
 func (mgr *Manager) refillPool() {
-	if mgr.cfg.DesktopPool <= 0 {
+	if mgr.cfg.DesktopPool <= 0 || mgr.cfg.NehemiahMode {
 		return
 	}
 	mgr.mu.Lock()
@@ -47,39 +47,84 @@ func (mgr *Manager) warmDesktop() {
 		pooled:    true,
 		CreatedAt: now,
 		ExpiresAt: now.Add(time.Hour), // long; reaped only if it's never claimed
+		VCPUs:     tpl.VCPUs,
+		MemoryMB:  tpl.MemSizeMB,
 	}
 	mgr.machines[id] = m
+	mgr.transitionLocked(m, "", "warming", "warm_pool")
+	mgr.persistLocked()
 	mgr.mu.Unlock()
 
-	drv, mode, bootMS, err := bootMachine(mgr.cfg, id, tpl, "", false)
+	drv, mode, bootMS, err := mgr.boot(mgr.cfg, id, tpl, "", false, false, 0)
 	if err != nil {
 		mgr.mu.Lock()
 		delete(mgr.machines, id)
+		mgr.transitionLocked(m, "warming", "failed", "warm_pool_boot")
+		mgr.persistLocked()
 		mgr.mu.Unlock()
-		log.Printf("warm desktop %s: boot failed: %v", id, err)
+		if mgr.cfg.NehemiahMode {
+			logManagedHostEvent(managedHostEventWarmPoolBootFailed, managedHostLogFields{MachineID: id, Err: err})
+		} else {
+			log.Printf("warm desktop %s: boot failed: %v", id, err)
+		}
 		return
 	}
 	if !mgr.cfg.JailerEnable {
-		mgr.cgroups.Place(drv.PID(), id, tpl)
+		if err := mgr.cgroups.Place(drv.PID(), id, tpl, drv.overlay); err != nil {
+			if mgr.cfg.NehemiahMode {
+				drv.Close()
+				mgr.rollback(id)
+				logManagedHostEvent(managedHostEventCgroupPlaceFailed, managedHostLogFields{MachineID: id, Err: err})
+				return
+			}
+			log.Printf("warm desktop %s: cgroup limits unavailable: %v", id, err)
+		}
 	}
-	// Let X + chromium finish painting before it becomes claimable.
-	time.Sleep(7 * time.Second)
-
 	mgr.mu.Lock()
 	m.driver = drv
 	m.Mode = mode
 	m.BootMS = bootMS
-	m.Status = "ready"
+	m.StartedAt = drv.startedAt
+	if m.StartedAt.IsZero() {
+		m.StartedAt = time.Now().UTC()
+	}
+	m.Status = "starting"
 	m.timer = time.AfterFunc(time.Until(m.ExpiresAt), func() { mgr.reap(id) })
+	mgr.transitionLocked(m, "warming", "starting", "warm_pool_vmm_started")
+	mgr.persistLocked()
+	mgr.mu.Unlock()
+	if !mgr.awaitReady(id, 15*time.Second) {
+		mgr.rollback(id)
+		if mgr.cfg.NehemiahMode {
+			logManagedHostEvent(managedHostEventWarmPoolReadinessFailed, managedHostLogFields{MachineID: id})
+		} else {
+			log.Printf("warm desktop %s: guest agent did not become ready", id)
+		}
+		return
+	}
+	// Let X + chromium finish painting after guest-level readiness.
+	time.Sleep(7 * time.Second)
+
+	mgr.mu.Lock()
+	if _, exists := mgr.machines[id]; !exists {
+		mgr.mu.Unlock()
+		return
+	}
 	mgr.pool = append(mgr.pool, m)
+	mgr.transitionLocked(m, "running", "running", "warm_pool_ready")
+	mgr.persistLocked()
 	n := len(mgr.pool)
 	mgr.mu.Unlock()
-	log.Printf("warmed desktop %s into the pool (%d ready)", id, n)
+	if mgr.cfg.NehemiahMode {
+		logManagedHostEvent(managedHostEventWarmPoolReady, managedHostLogFields{MachineID: id, Count: int64(n)})
+	} else {
+		log.Printf("warmed desktop %s into the pool (%d ready)", id, n)
+	}
 }
 
 // claimPooled hands a ready pooled desktop to a user, re-timed to their TTL.
 // Returns nil if the pool is empty.
-func (mgr *Manager) claimPooled(creatorIP string, ttl int, persistent bool) *Machine {
+func (mgr *Manager) claimPooled(creatorIP string, ttl int, persistent bool, options machineCreateOptions) *Machine {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 	if len(mgr.pool) == 0 {
@@ -90,6 +135,10 @@ func (mgr *Manager) claimPooled(creatorIP string, ttl int, persistent bool) *Mac
 	m.pooled = false
 	m.creatorIP = creatorIP
 	m.Persistent = persistent
+	m.LeaseID = options.LeaseID
+	m.Metadata = cloneMetadata(options.Metadata)
+	m.IdempotencyKey = options.IdempotencyKey
+	m.requestFingerprint = options.RequestFingerprint
 	m.ExpiresAt = time.Now().Add(time.Duration(ttl) * time.Second)
 	if m.timer != nil {
 		m.timer.Stop()
@@ -101,5 +150,7 @@ func (mgr *Manager) claimPooled(creatorIP string, ttl int, persistent bool) *Mac
 	}
 	m.BootMS = 0
 	m.Mode = "warm"
+	mgr.transitionLocked(m, "running", "running", "warm_pool_claimed")
+	mgr.persistLocked()
 	return m
 }

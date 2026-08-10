@@ -65,6 +65,34 @@ func guestIP(id, leasesPath string) (string, bool) {
 	return "", false
 }
 
+// stripGuestRequestHeaders enforces the host-to-guest trust boundary. The
+// gateway authenticates to nehemiahd with a per-host credential and current
+// lease header; neither value may cross into an untrusted guest application.
+// A nil X-Forwarded-For value also tells ReverseProxy not to synthesize one
+// after the Director returns.
+func stripGuestRequestHeaders(header http.Header) {
+	for _, name := range []string{
+		"Authorization",
+		"Proxy-Authorization",
+		"Cookie",
+		"X-Api-Key",
+		"Cf-Access-Jwt-Assertion",
+		"Forwarded",
+		"X-Forwarded-Host",
+		"X-Forwarded-Proto",
+		"X-Forwarded-Port",
+		"X-Real-Ip",
+	} {
+		header.Del(name)
+	}
+	for name := range header {
+		if strings.HasPrefix(http.CanonicalHeaderKey(name), "X-Nehemiah-") {
+			header.Del(name)
+		}
+	}
+	header["X-Forwarded-For"] = nil
+}
+
 // handlePreview reverse-proxies a request to the guest's <port>.
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, id string, port int) {
 	if _, ok := s.mgr.Get(id); !ok {
@@ -81,6 +109,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, id string
 	base := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		base(req)
+		stripGuestRequestHeaders(req.Header)
 		req.Host = target.Host // vhost apps expect their own host
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
@@ -115,6 +144,7 @@ func (s *Server) handleWebProxy(w http.ResponseWriter, r *http.Request) {
 	base := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		base(req)
+		stripGuestRequestHeaders(req.Header)
 		req.URL.Path = "/" + rest
 		req.URL.RawQuery = r.URL.RawQuery
 		req.Host = target.Host

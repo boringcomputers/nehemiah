@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+const agentControlFrameLimit = 64 << 10
 
 // anthropicRequest holds the parameters for a call to the Anthropic Messages API.
 type anthropicRequest struct {
@@ -25,6 +28,10 @@ type anthropicRequest struct {
 // callAnthropicAPI posts a request to the Anthropic Messages API and returns
 // the parsed response. Both the computer-use agent and the shell agent use this.
 func callAnthropicAPI(cfg Config, req anthropicRequest) (*apiResp, error) {
+	return callAnthropicAPIContext(context.Background(), cfg, req)
+}
+
+func callAnthropicAPIContext(ctx context.Context, cfg Config, req anthropicRequest) (*apiResp, error) {
 	body := map[string]any{
 		"model":      req.Model,
 		"max_tokens": req.MaxTokens,
@@ -37,7 +44,7 @@ func callAnthropicAPI(cfg Config, req anthropicRequest) (*apiResp, error) {
 	}
 
 	buf, _ := json.Marshal(body)
-	httpReq, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(buf))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(buf))
 	if err != nil {
 		return nil, err
 	}
@@ -76,10 +83,13 @@ func callAnthropicAPI(cfg Config, req anthropicRequest) (*apiResp, error) {
 // agentGuard holds the shared boilerplate that both the computer-use agent and
 // the shell agent check before entering their main loops.
 type agentGuard struct {
-	conn    *websocket.Conn
-	send    func(typ, text string)
-	stopped func() bool
-	stop    chan struct{}
+	conn          *websocket.Conn
+	send          func(typ, text string)
+	stopped       func() bool
+	stop          chan struct{}
+	keepaliveStop func()
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // setupAgentGuard validates auth, budget and concurrency, upgrades the WebSocket,
@@ -90,32 +100,39 @@ func (s *Server) setupAgentGuard(w http.ResponseWriter, r *http.Request) *agentG
 	if err != nil {
 		return nil
 	}
+	conn.SetReadLimit(agentControlFrameLimit)
+	stopKeepalive := startWebSocketKeepalive(conn)
 	send := func(typ, text string) {
 		_ = conn.WriteJSON(map[string]string{"type": typ, "text": text})
 	}
 
 	if s.cfg.AnthropicKey == "" {
 		send("error", "the agent isn't configured on this server")
+		stopKeepalive()
 		conn.Close()
 		return nil
 	}
 	if n := agentRunsAdd(1); int(n) > s.cfg.AgentMaxConcurrent {
 		agentRunsAdd(-1)
 		send("error", "too many agents are running right now — try again in a moment")
+		stopKeepalive()
 		conn.Close()
 		return nil
 	}
 	if !s.agentBudget.allow() {
 		agentRunsAdd(-1)
 		send("error", "the daily AI limit has been reached — please try again tomorrow")
+		stopKeepalive()
 		conn.Close()
 		return nil
 	}
 
 	stop := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
+				cancel()
 				close(stop)
 				return
 			}
@@ -123,18 +140,24 @@ func (s *Server) setupAgentGuard(w http.ResponseWriter, r *http.Request) *agentG
 	}()
 	stopped := func() bool {
 		select {
-		case <-stop:
+		case <-ctx.Done():
 			return true
 		default:
 			return false
 		}
 	}
 
-	return &agentGuard{conn: conn, send: send, stopped: stopped, stop: stop}
+	return &agentGuard{
+		conn: conn, send: send, stopped: stopped, stop: stop, keepaliveStop: stopKeepalive, ctx: ctx, cancel: cancel,
+	}
 }
 
 // close releases the concurrency slot and closes the WebSocket.
 func (g *agentGuard) close() {
+	if g.cancel != nil {
+		g.cancel()
+	}
 	agentRunsAdd(-1)
+	g.keepaliveStop()
 	g.conn.Close()
 }

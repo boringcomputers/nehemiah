@@ -15,8 +15,8 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// Storage is Nehemiah's persistent-volume layer, backed by any
-// S3-compatible object store (MinIO in dev, Latitude Object Storage in prod).
+// Storage is the local/self-hosted persistent-volume layer, backed by an
+// S3-compatible object store. Managed release policy keeps this layer disabled.
 // A "volume" is a prefix in one bucket: vol-<id>/.volume.json holds metadata and
 // vol-<id>/f/<path> holds files. No database — volumes are addressed by an
 // unguessable id (like shared machines), size-capped, and GC'd on a TTL. When

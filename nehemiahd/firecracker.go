@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -153,17 +155,23 @@ func (c *Console) closeSubs() {
 // ---------------------------------------------------------------------------
 
 type fcDriver struct {
-	cfg      Config
-	id       string
-	tpl      Template
-	cmd      *exec.Cmd
-	console  *Console
-	sock     string
-	overlay  string
-	vsockUDS string // host path to the vsock UDS (set when template has a display)
-	tap      string // host tap device name (set when networking is enabled)
-	ip       string // guest IP (set for forks, which are re-addressed statically)
-	apiClt   *http.Client
+	cfg            Config
+	id             string
+	tpl            Template
+	cmd            *exec.Cmd
+	console        *Console
+	sock           string
+	overlay        string
+	vsockUDS       string // host path to the vsock UDS (set when template has a display)
+	tap            string // host tap device name (set when networking is enabled)
+	ip             string // guest IP (static for forks; DHCP identity cached after first host connection)
+	identityPinned bool   // current daemon has proven the tap's exact IP/MAC binding
+	apiClt         *http.Client
+	pid            int    // retained across daemon reattachment when cmd is unavailable
+	scopeUnit      string // exact sibling systemd scope in managed mode
+	network        bool   // this machine requested a NIC; host networking alone is not consent
+	startedAt      time.Time
+	diskMB         int
 
 	// Jailer mode: firecracker runs chrooted + unprivileged. Paths handed to the
 	// firecracker API are relative to the chroot; host-side paths differ.
@@ -179,8 +187,11 @@ func (d *fcDriver) Console() *Console { return d.console }
 
 // PID returns the firecracker child's process id (0 if not running).
 func (d *fcDriver) PID() int {
-	if d == nil || d.cmd == nil || d.cmd.Process == nil {
+	if d == nil {
 		return 0
+	}
+	if d.cmd == nil || d.cmd.Process == nil {
+		return d.pid
 	}
 	return d.cmd.Process.Pid
 }
@@ -189,7 +200,10 @@ func (d *fcDriver) PID() int {
 // configure it over the API socket, start it (or restore a snapshot), and time
 // the boot up to the readiness marker. snapDir, if non-empty, points at a
 // directory containing snapshot_file + mem_file to restore from.
-func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet bool) (*fcDriver, string, int64, error) {
+func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet, network bool, diskMB int) (*fcDriver, string, int64, error) {
+	if !validMachineID(id) {
+		return nil, "", 0, fmt.Errorf("unsafe machine id %q", id)
+	}
 	if err := os.MkdirAll(cfg.RunDir, 0o755); err != nil {
 		return nil, "", 0, fmt.Errorf("mkdir run dir: %w", err)
 	}
@@ -199,13 +213,23 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 	// Path plan differs between direct and jailed launch. In jailed mode the
 	// firecracker API sees chroot-relative paths; host paths point into the jail.
 	var sock, overlay, chroot string
-	d := &fcDriver{cfg: cfg, id: id, tpl: tpl, jailed: jailed}
+	d := &fcDriver{cfg: cfg, id: id, tpl: tpl, jailed: jailed, network: network, diskMB: diskMB}
 	if jailed {
-		chroot = filepath.Join(cfg.ChrootBase, "firecracker", id, "root")
+		jailDir := filepath.Join(cfg.ChrootBase, "firecracker", id)
+		chroot = filepath.Join(jailDir, "root")
 		sock = filepath.Join(chroot, "run", "fc.sock")
 		overlay = filepath.Join(chroot, "rootfs.ext4")
 		d.chroot, d.apiKernel, d.apiRootfs, d.apiVsock = chroot, "/vmlinux", "/rootfs.ext4", "/run/vsock"
-		_ = os.RemoveAll(filepath.Join(cfg.ChrootBase, "firecracker", id))
+		if err := os.RemoveAll(jailDir); err != nil {
+			if cfg.NehemiahMode {
+				return nil, "", 0, fmt.Errorf("remove stale managed jail: %w", err)
+			}
+		} else if _, err := os.Lstat(jailDir); cfg.NehemiahMode && !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return nil, "", 0, fmt.Errorf("verify stale managed jail removal: %w", err)
+			}
+			return nil, "", 0, errors.New("stale managed jail remains after cleanup")
+		}
 	} else {
 		sock = filepath.Join(cfg.RunDir, id+".sock")
 		overlay = filepath.Join(cfg.RunDir, id+".ext4")
@@ -236,69 +260,80 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 			baseRootfs = snRoot
 		}
 	}
+	if err := enforceOverlayQuota(baseRootfs, cfg.OverlayQuotaMB, diskMB); err != nil {
+		return nil, "", 0, err
+	}
 
 	// Direct mode: stage the overlay before launch (the run dir already exists).
 	// Jailed mode: the chroot only exists after jailer runs, so stage below.
 	if !jailed {
 		if err := copyReflink(baseRootfs, overlay); err != nil {
+			_ = os.Remove(overlay)
 			return nil, "", 0, fmt.Errorf("copy overlay: %w", err)
 		}
+		if err := resizeOverlay(overlay, diskMB); err != nil {
+			_ = os.Remove(overlay)
+			return nil, "", 0, err
+		}
 	}
 
-	// Build the launch command.
-	var cmd *exec.Cmd
-	if jailed {
-		args := []string{
-			"--id", id,
-			"--exec-file", cfg.FirecrackerBin,
-			"--uid", strconv.Itoa(cfg.JailerUID),
-			"--gid", strconv.Itoa(cfg.JailerGID),
-			"--cgroup-version", "2",
-			"--chroot-base-dir", cfg.ChrootBase,
+	// Firecracker enables its production seccomp filters by default. The launch
+	// builder deliberately has no path which can append --no-seccomp.
+	ioLimit, err := cgroupIOMax(baseRootfs, cfg)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("derive overlay I/O limit: %w", err)
+	}
+	var console *Console
+	var sub *consoleSub
+	if cfg.NehemiahMode {
+		// Managed VMMs must not inherit daemon-owned pipes: losing those file
+		// descriptors on restart would make serial output hit a broken pipe and
+		// customer TTY unrecoverable. systemd-run receives null stdio by default;
+		// interactive customer terminals use the guest agent over vsock.
+		cmd, unit, scopeErr := buildManagedScopeCommand(cfg, id, tpl, baseRootfs)
+		if scopeErr != nil {
+			d.Close()
+			return nil, "", 0, scopeErr
 		}
-		// Have the jailer create a child cgroup (with resource caps) inside
-		// nehemiahd's delegated subtree. Passing --cgroup makes jailer create a
-		// child cgroup named after the id rather than joining the parent directly.
-		if parent := jailerParentCgroup(); parent != "" {
-			mem := tpl.MemSizeMB
-			if mem <= 0 {
-				mem = cfg.MemSizeMB
-			}
-			args = append(args,
-				"--parent-cgroup", parent,
-				"--cgroup", fmt.Sprintf("cpu.max=%d 100000", cfg.CPUMaxPercent*1000),
-				"--cgroup", fmt.Sprintf("pids.max=%d", cfg.PidsMax),
-				"--cgroup", fmt.Sprintf("memory.max=%d", (mem+128)*1024*1024),
-			)
+		d.scopeUnit = unit
+		d.apiClt = newUnixClient(sock)
+		if err := cmd.Start(); err != nil {
+			d.Close()
+			return nil, "", 0, fmt.Errorf("start managed scope: %w", err)
 		}
-		args = append(args, "--", "--api-sock", "/run/fc.sock")
-		cmd = exec.Command(cfg.JailerBin, args...)
+		d.startedAt = time.Now().UTC()
+		// systemd-run --scope waits for the scoped process. Reap the launcher
+		// while this daemon is alive; after a daemon restart PID 1 adopts it,
+		// while the VMM remains independently owned by the sibling scope.
+		go func() { _ = cmd.Wait() }()
 	} else {
-		cmd = exec.Command(cfg.FirecrackerBin, "--api-sock", sock, "--id", id)
-	}
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		d.Close()
-		return nil, "", 0, fmt.Errorf("stdin pipe: %w", err)
-	}
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		d.Close()
-		return nil, "", 0, fmt.Errorf("stdout pipe: %w", err)
-	}
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		d.Close()
-		return nil, "", 0, fmt.Errorf("start: %w", err)
-	}
+		cmd := buildFirecrackerCommand(cfg, id, tpl, sock, ioLimit)
+		stdinPipe, pipeErr := cmd.StdinPipe()
+		if pipeErr != nil {
+			d.Close()
+			return nil, "", 0, fmt.Errorf("stdin pipe: %w", pipeErr)
+		}
+		stdoutPipe, pipeErr := cmd.StdoutPipe()
+		if pipeErr != nil {
+			d.Close()
+			return nil, "", 0, fmt.Errorf("stdout pipe: %w", pipeErr)
+		}
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			d.Close()
+			return nil, "", 0, fmt.Errorf("start: %w", err)
+		}
+		d.pid = cmd.Process.Pid
+		d.startedAt = time.Now().UTC()
+		console = newConsole(stdinPipe)
+		go console.pump(stdoutPipe)
+		d.cmd, d.console, d.apiClt = cmd, console, newUnixClient(sock)
 
-	console := newConsole(stdinPipe)
-	go console.pump(stdoutPipe)
-	d.cmd, d.console, d.apiClt = cmd, console, newUnixClient(sock)
-
-	// Subscribe before we start so the boot-timer sees the whole stream.
-	_, sub := console.Subscribe()
-	defer console.Unsubscribe(sub)
+		// Subscribe before the VM starts so local-mode boot timing sees the
+		// complete serial stream.
+		_, sub = console.Subscribe()
+		defer console.Unsubscribe(sub)
+	}
 
 	socketWait := 5 * time.Second
 	if jailed {
@@ -307,6 +342,14 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 	if err := waitForSocket(sock, socketWait); err != nil {
 		d.Close()
 		return nil, "", 0, fmt.Errorf("api socket: %w", err)
+	}
+	if cfg.NehemiahMode {
+		pid, pidErr := waitForManagedScopePID(id, d.scopeUnit, 5*time.Second)
+		if pidErr != nil {
+			d.Close()
+			return nil, "", 0, pidErr
+		}
+		d.pid = pid
 	}
 
 	// Jailed mode: the chroot now exists; stage kernel + rootfs (+ snapshot
@@ -328,7 +371,7 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 		// the fork its own tap up front — detached from the bridge, since it
 		// resumes on the source's MAC/IP and must be re-addressed before it can
 		// safely join the network (the caller does that).
-		if restoreNet && cfg.NetEnable {
+		if restoreNet && network && cfg.NetEnable {
 			tap := tapName(d.id)
 			uid := 0
 			if d.jailed {
@@ -345,10 +388,14 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 		// itself rather than waiting for a marker that will never reappear.
 		t := time.Now()
 		if err := d.restoreSnapshot(snapDir, overlay); err != nil {
-			log.Printf("machine %s: snapshot restore failed, cold booting: %v", id, err)
+			if cfg.NehemiahMode {
+				logManagedHostEvent(managedHostEventSnapshotRestoreFailed, managedHostLogFields{MachineID: id, Err: err})
+			} else {
+				log.Printf("machine %s: snapshot restore failed, cold booting: %v", id, err)
+			}
 			// The child may be in a bad state; restart cleanly as cold boot.
 			d.Close()
-			return bootMachine(cfg, id, tpl, "", false)
+			return bootMachine(cfg, id, tpl, "", false, network, diskMB)
 		}
 		mode = "snapshot"
 		bootMS = time.Since(t).Milliseconds()
@@ -358,8 +405,14 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 			d.Close()
 			return nil, "", 0, fmt.Errorf("cold boot: %w", err)
 		}
-		// Time the boot up to the readiness marker.
-		bootMS = waitForMarker(sub, start, bootTimeout)
+		if sub != nil {
+			// Local mode times the serial readiness marker. Managed mode reports
+			// VMM start here and independently gates customer readiness on the
+			// reconnectable guest-agent probe in Manager.awaitReady.
+			bootMS = waitForMarker(sub, start, bootTimeout)
+		} else {
+			bootMS = time.Since(start).Milliseconds()
+		}
 	}
 
 	return d, mode, bootMS, nil
@@ -368,7 +421,7 @@ func bootMachine(cfg Config, id string, tpl Template, snapDir string, restoreNet
 // coldBoot configures and starts a fresh VM via the firecracker API.
 func (d *fcDriver) coldBoot() error {
 	bootArgs := "console=ttyS0 reboot=k panic=1 pci=off i8042.noaux i8042.nomux random.trust_cpu=on"
-	if d.cfg.NetEnable {
+	if d.network && d.cfg.NetEnable {
 		// Kernel-level DHCP brings eth0 up before init; dnsmasq hands out a lease.
 		bootArgs += " ip=dhcp"
 	}
@@ -404,13 +457,13 @@ func (d *fcDriver) coldBoot() error {
 	}
 	// Networking: a per-VM tap on the host bridge, NATed out. The tap is owned by
 	// the jailed uid so the (unprivileged) firecracker child can open it.
-	if d.cfg.NetEnable {
+	if d.network && d.cfg.NetEnable {
 		tap := tapName(d.id)
 		uid := 0
 		if d.jailed {
 			uid = d.cfg.JailerUID
 		}
-		if err := createTap(tap, uid, d.cfg.NetBridge); err != nil {
+		if err := createTap(tap, uid, d.cfg.NetBridge, guestMAC(d.id), d.cfg.NehemiahMode); err != nil {
 			return err
 		}
 		d.tap = tap
@@ -472,6 +525,9 @@ func (d *fcDriver) restoreSnapshot(snapDir, overlay string) error {
 			map[string]any{"iface_id": "eth0", "host_dev_name": d.tap},
 		}
 	}
+	if d.vsockUDS != "" {
+		load["vsock_override"] = map[string]any{"uds_path": d.apiVsock}
+	}
 	if err := d.apiPut("/snapshot/load", load); err != nil {
 		return err
 	}
@@ -520,7 +576,11 @@ func (d *fcDriver) CreateSnapshot(newID string) (string, error) {
 		return "", fmt.Errorf("snapshot create: %w", err)
 	}
 	if err := d.apiPatch("/vm", map[string]any{"state": "Resumed"}); err != nil {
-		log.Printf("machine %s: resume after snapshot failed: %v", d.id, err)
+		if d.cfg.NehemiahMode {
+			logManagedHostEvent(managedHostEventSnapshotResumeFailed, managedHostLogFields{MachineID: d.id, Err: err})
+		} else {
+			log.Printf("machine %s: resume after snapshot failed: %v", d.id, err)
+		}
 	}
 
 	// Move the snapshot + memory files out of the source's chroot into snapDir.
@@ -541,7 +601,11 @@ func (d *fcDriver) CreateSnapshot(newID string) (string, error) {
 
 	// Give the child a copy of the current rootfs so the fork is independent.
 	if err := copyReflink(d.overlay, filepath.Join(snapDir, "rootfs.ext4")); err != nil {
-		log.Printf("machine %s: snapshot rootfs copy failed: %v", d.id, err)
+		if d.cfg.NehemiahMode {
+			logManagedHostEvent(managedHostEventSnapshotRootfsCopyFailed, managedHostLogFields{MachineID: d.id, Err: err})
+		} else {
+			log.Printf("machine %s: snapshot rootfs copy failed: %v", d.id, err)
+		}
 	}
 	return snapDir, nil
 }
@@ -598,12 +662,23 @@ func (d *fcDriver) Close() {
 		return
 	}
 	// Best-effort graceful shutdown of the guest first.
-	_ = d.apiPut("/actions", map[string]any{"action_type": "SendCtrlAltDel"})
+	if d.apiClt != nil {
+		_ = d.apiPut("/actions", map[string]any{"action_type": "SendCtrlAltDel"})
+	}
 
-	if d.cmd != nil && d.cmd.Process != nil {
+	if d.scopeUnit != "" {
+		stopManagedScope(d.cfg, d.scopeUnit)
+		// If systemd could not complete the stop, a signal is permitted only
+		// after re-proving both the exact machine identity and exact scope.
+		killManagedScopePID(d.pid, d.id, d.scopeUnit)
+	} else if d.cmd != nil && d.cmd.Process != nil {
 		_ = d.cmd.Process.Kill()
 		// Reap the child to avoid zombies; ignore the wait error.
 		go func(c *exec.Cmd) { _ = c.Wait() }(d.cmd)
+	} else if d.pid > 0 {
+		if processMatchesMachine(d.pid, d.id) {
+			_ = syscall.Kill(d.pid, syscall.SIGKILL)
+		}
 	}
 	if d.console != nil {
 		d.console.closeSubs()
@@ -611,6 +686,7 @@ func (d *fcDriver) Close() {
 			_ = d.console.stdin.Close()
 		}
 	}
+	removePinnedGuestNeighbor(d.cfg.NetBridge, d.cfg.NetSubnet, d.ip, guestMAC(d.id))
 	teardownTap(d.tap)
 	if d.jailed && d.chroot != "" {
 		// Remove the whole jail (root/ holds sock, overlay, kernel link, vsock).
@@ -622,6 +698,94 @@ func (d *fcDriver) Close() {
 			_ = os.Remove(d.vsockUDS)
 		}
 	}
+}
+
+// Detach releases daemon-side console subscribers while intentionally leaving
+// the VMM, API/vsock sockets, tap and overlay intact for restart reconciliation.
+func (d *fcDriver) Detach() {
+	if d == nil || d.console == nil {
+		return
+	}
+	d.console.closeSubs()
+}
+
+// buildFirecrackerCommand is kept pure enough for security tests to inspect the
+// exact jailer boundary. Resource values are passed as jailer cgroup properties;
+// Firecracker's default seccomp filter remains enabled (no --no-seccomp).
+func buildFirecrackerCommand(cfg Config, id string, tpl Template, sock, ioLimit string) *exec.Cmd {
+	if !cfg.JailerEnable {
+		return exec.Command(cfg.FirecrackerBin, "--api-sock", sock, "--id", id)
+	}
+	return exec.Command(cfg.JailerBin, buildJailerArgs(cfg, id, tpl, jailerParentCgroup(), ioLimit)...)
+}
+
+func buildJailerArgs(cfg Config, id string, tpl Template, parent, ioLimit string) []string {
+	args := []string{
+		"--id", id,
+		"--exec-file", cfg.FirecrackerBin,
+		"--uid", strconv.Itoa(cfg.JailerUID),
+		"--gid", strconv.Itoa(cfg.JailerGID),
+		"--cgroup-version", "2",
+		"--chroot-base-dir", cfg.ChrootBase,
+	}
+	// Have the jailer create a child cgroup (with resource caps) inside
+	// nehemiahd's delegated subtree. Passing --cgroup makes jailer create a
+	// child cgroup named after the id rather than joining the parent directly.
+	if parent != "" {
+		mem := tpl.MemSizeMB
+		if mem <= 0 {
+			mem = cfg.MemSizeMB
+		}
+		args = append(args,
+			"--parent-cgroup", parent,
+			"--cgroup", fmt.Sprintf("cpu.max=%d 100000", cpuQuotaMicros(cfg, tpl)),
+			"--cgroup", fmt.Sprintf("pids.max=%d", cfg.PidsMax),
+			"--cgroup", fmt.Sprintf("memory.max=%d", (mem+128)*1024*1024),
+		)
+		if ioLimit != "" {
+			args = append(args, "--cgroup", "io.max="+ioLimit)
+		}
+	}
+	args = append(args, "--", "--api-sock", "/run/fc.sock")
+	return args
+}
+
+func enforceOverlayQuota(path string, quotaMB, requestedMB int) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat base rootfs: %w", err)
+	}
+	if quotaMB <= 0 || info.Size() > int64(quotaMB)*1024*1024 {
+		return fmt.Errorf("rootfs size %d bytes exceeds per-machine overlay quota of %dMB", info.Size(), quotaMB)
+	}
+	if requestedMB > 0 && info.Size() > int64(requestedMB)*1024*1024 {
+		return fmt.Errorf("%w: disk_mb=%d is smaller than the %d-byte base image", ErrInvalidResources, requestedMB, info.Size())
+	}
+	return nil
+}
+
+func resizeOverlay(path string, requestedMB int) error {
+	if requestedMB <= 0 {
+		return nil
+	}
+	target := int64(requestedMB) * 1024 * 1024
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat overlay: %w", err)
+	}
+	if info.Size() == target {
+		return nil
+	}
+	if info.Size() > target {
+		return fmt.Errorf("%w: refusing to shrink rootfs overlay", ErrInvalidResources)
+	}
+	if err := os.Truncate(path, target); err != nil {
+		return fmt.Errorf("grow overlay: %w", err)
+	}
+	if output, err := exec.Command("resize2fs", "-f", path).CombinedOutput(); err != nil {
+		return fmt.Errorf("resize overlay filesystem: %w: %s", err, output)
+	}
+	return nil
 }
 
 // stageJail places the kernel, rootfs overlay and (when restoring) snapshot
@@ -639,6 +803,9 @@ func stageJail(cfg Config, d *fcDriver, baseRootfs, snapDir string) error {
 
 	if err := copyReflink(baseRootfs, d.overlay); err != nil {
 		return fmt.Errorf("overlay: %w", err)
+	}
+	if err := resizeOverlay(d.overlay, d.diskMB); err != nil {
+		return err
 	}
 	if err := os.Chown(d.overlay, uid, gid); err != nil {
 		return fmt.Errorf("chown overlay: %w", err)
@@ -685,19 +852,34 @@ func hardlinkOrCopy(src, dst string) error {
 // UDS, performing the host-initiated "CONNECT <port>" handshake. Used to reach
 // the desktop VNC server (guest vsock port 5900) for the /vnc bridge.
 func (d *fcDriver) DialVsock(port int) (net.Conn, error) {
+	return d.DialVsockContext(context.Background(), port)
+}
+
+// DialVsockContext is the cancellation-aware form used by managed lifecycle
+// operations. A snapshot-restored VMM may exist before its driver is published
+// in Manager, so those operations dial the exact driver while remaining bounded
+// by their lease-scoped context.
+func (d *fcDriver) DialVsockContext(ctx context.Context, port int) (net.Conn, error) {
 	if d.vsockUDS == "" {
 		return nil, fmt.Errorf("machine has no vsock device")
 	}
-	conn, err := net.DialTimeout("unix", d.vsockUDS, 5*time.Second)
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	conn, err := dialer.DialContext(ctx, "unix", d.vsockUDS)
 	if err != nil {
 		return nil, fmt.Errorf("dial vsock uds: %w", err)
 	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	deadline := time.Now().Add(5 * time.Second)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	_ = conn.SetDeadline(deadline)
 	if _, err := fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	// Read the "OK <port>\n" acknowledgement line before returning the raw stream.
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	line := make([]byte, 0, 32)
 	buf := make([]byte, 1)
 	for {
@@ -721,7 +903,11 @@ func (d *fcDriver) DialVsock(port int) (net.Conn, error) {
 		conn.Close()
 		return nil, fmt.Errorf("vsock connect refused: %q", string(line))
 	}
-	_ = conn.SetReadDeadline(time.Time{})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		conn.Close()
+		return nil, ctxErr
+	}
+	_ = conn.SetDeadline(time.Time{})
 	return conn, nil
 }
 
