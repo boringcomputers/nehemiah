@@ -1,56 +1,55 @@
 {
-	"name": "nehemiah-sdk",
+	"name": "nehemiah-cli",
 	"version": "0.2.0-beta.0",
-	"description": "Effect-native client for Boring Computers Cloud, self-hosted Nehemiah, and local Firecracker microVMs.",
+	"description": "Command-line client for Boring Computers Cloud and self-hosted Nehemiah",
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/boringcomputers/nehemiah.git",
-		"directory": "packages/sdk"
+		"directory": "packages/cli"
 	},
 	"homepage": "https://github.com/boringcomputers/nehemiah#readme",
 	"keywords": [
-		"firecracker",
+		"boring-computers",
+		"nehemiah",
+		"cloud",
 		"microvm",
-		"sandbox",
-		"ai",
-		"agents",
-		"effect",
-		"cloud"
+		"cli"
 	],
-	"engines": {
-		"node": ">=20"
-	},
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
-	"exports": {
-		".": {
-			"types": "./dist/index.d.ts",
-			"default": "./dist/index.js"
-		}
+	"bin": {
+		"bc": "./dist/index.js",
+		"nehemiah": "./dist/index.js"
 	},
 	"files": [
 		"dist",
 		"README.md"
 	],
+	"engines": {
+		"node": ">=20"
+	},
 	"prettier": "@nehemiah/prettier-config",
 	"scripts": {
-		"check": "tsc --noEmit",
 		"build": "tsc",
+		"check": "tsc --noEmit",
 		"test": "vitest run",
 		"lint": "prettier --check .",
 		"format": "prettier --write .",
 		"prepublishOnly": "npm run build"
 	},
 	"dependencies": {
-		"effect": "^3.12.0"
+		"@napi-rs/keyring": "1.3.0",
+		"effect": "^3.12.0",
+		"nehemiah-sdk": "^0.2.0-beta.0"
 	},
 	"devDependencies": {
-		"typescript": "^6.0.3",
-		"@nehemiah/typescript-config": "*",
 		"@nehemiah/prettier-config": "*",
+		"@nehemiah/typescript-config": "*",
 		"@types/node": "^24",
+		"esbuild": "^0.28.1",
+		"typescript": "^6.0.3",
 		"vitest": "^4.1.10"
 	}
 }

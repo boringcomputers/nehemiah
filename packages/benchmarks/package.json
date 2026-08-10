@@ -1,0 +1,19 @@
+{
+	"name": "@nehemiah/benchmarks",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "node --test test/*.test.mjs",
+		"check": "node --check src/run.mjs && node --check src/stats.mjs",
+		"build": "node --check src/run.mjs",
+		"lint": "prettier --check .",
+		"format": "prettier --write .",
+		"benchmark": "node src/run.mjs"
+	},
+	"devDependencies": {
+		"@nehemiah/prettier-config": "*",
+		"prettier": "^3.8.2"
+	},
+	"prettier": "@nehemiah/prettier-config"
+}
