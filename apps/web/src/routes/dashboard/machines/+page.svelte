@@ -360,8 +360,15 @@
 		const popup = window.open('about:blank', '_blank');
 		if (popup) popup.opener = null;
 		setBusy(id, 'Opening preview…');
+		const requestedProjectId = projectId;
 		try {
 			const session = await issueSession(id, 'preview');
+			// Abandon a preview the user has navigated away from (e.g. project switch)
+			// rather than publishing its URL or redirecting the popup.
+			if (requestedProjectId !== projectId) {
+				popup?.close();
+				return;
+			}
 			previewLink = machinePreviewUrl(session, id, previewPort);
 			if (popup) {
 				popup.location.replace(previewLink);
