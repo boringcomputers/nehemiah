@@ -32,6 +32,7 @@ test-results
 # Go build output
 /nehemiahd/nehemiahd
 /guest-agent/guest-agent
+/gateway/gateway
 *.test
 
 # SDK build output
