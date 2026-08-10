@@ -1,0 +1,16 @@
+{
+	"extends": "@nehemiah/typescript-config/base.json",
+	"compilerOptions": {
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"target": "ES2023",
+		"lib": ["ES2023", "DOM", "DOM.Iterable"],
+		"types": ["node"],
+		"declaration": true,
+		"sourceMap": true,
+		"outDir": "dist",
+		"rootDir": "src"
+	},
+	"include": ["src"],
+	"exclude": ["dist", "node_modules"]
+}

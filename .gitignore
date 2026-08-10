@@ -40,3 +40,7 @@ packages/sdk/dist/
 
 # Claude runtime
 .claude/
+
+# Python bytecode
+__pycache__/
+*.pyc

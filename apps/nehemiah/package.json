@@ -1,0 +1,42 @@
+{
+	"name": "@nehemiah/nehemiah",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "tsx watch src/main.ts",
+		"build": "tsc",
+		"check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+		"test": "vitest run --exclude 'dist/**'",
+		"lint": "prettier --check src test",
+		"format": "prettier --write src test",
+		"migrate": "node dist/db/migrate.js",
+		"migrate:dev": "tsx src/db/migrate.ts"
+	},
+	"dependencies": {
+		"@aws-sdk/client-s3": "^3.1106.0",
+		"@aws-sdk/s3-request-presigner": "^3.1106.0",
+		"@node-rs/argon2": "^2.0.2",
+		"@opentelemetry/api": "^1.9.1",
+		"@opentelemetry/exporter-metrics-otlp-http": "^0.221.0",
+		"@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
+		"@opentelemetry/resources": "^2.10.0",
+		"@opentelemetry/sdk-metrics": "^2.10.0",
+		"@opentelemetry/sdk-node": "^0.221.0",
+		"@opentelemetry/semantic-conventions": "^1.43.0",
+		"effect": "^3.12.0",
+		"jose": "^6.1.3",
+		"pg": "^8.16.3",
+		"yaml": "^2.8.1"
+	},
+	"devDependencies": {
+		"@nehemiah/prettier-config": "*",
+		"@nehemiah/typescript-config": "*",
+		"@types/node": "^24",
+		"@types/pg": "^8.15.5",
+		"tsx": "^4.20.6",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
+	},
+	"prettier": "@nehemiah/prettier-config"
+}
