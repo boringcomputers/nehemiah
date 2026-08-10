@@ -821,6 +821,10 @@ databaseDescribe('authoritative metering PostgreSQL contract', () => {
 			observation(identity, 1, 'start', 0n, 0n, '2026-08-08T12:00:00.000Z'),
 			observation(identity, 2, 'checkpoint', 10n * second, 100n, '2026-08-08T12:00:10.000Z')
 		]);
+		// A degraded final only closes the meter once the machine is terminal.
+		await database.query(`UPDATE machines SET state = 'stopping' WHERE id = $1`, [
+			identity.machineId
+		]);
 		const result = await metering.ingest(hostId, [
 			observation(identity, 3, 'final', 10n * second, 100n, '2026-08-08T12:00:10.000Z', {
 				quality: 'last_defensible',
