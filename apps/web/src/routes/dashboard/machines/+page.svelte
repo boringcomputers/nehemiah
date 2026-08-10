@@ -66,6 +66,7 @@
 	let vncHandle: VncHandle | null | undefined;
 	let connectionGeneration = 0;
 	let refreshInFlight = $state(false);
+	let refreshGeneration = 0;
 
 	const selectedMachine = $derived(machines.find((machine) => machine.id === selectedMachineId));
 	const isTerminal = (machine: Machine) => ['stopped', 'failed', 'lost'].includes(machine.state);
@@ -98,22 +99,30 @@
 	}
 
 	async function refreshMachines(silent = false) {
-		if (!projectId || refreshInFlight) return;
+		if (!projectId) return;
+		// A newer refresh (e.g. after a project switch) supersedes this one, so a
+		// stale in-flight response is never applied under a different selection.
+		const generation = ++refreshGeneration;
+		const requestedProjectId = projectId;
 		refreshInFlight = true;
 		if (!silent) loadError = '';
 		try {
-			machines = (
+			const result = (
 				await dashboardApi<{ machines: Machine[] }>(
-					`/v1/machines?project_id=${encodeURIComponent(projectId)}`
+					`/v1/machines?project_id=${encodeURIComponent(requestedProjectId)}`
 				)
 			).machines;
+			if (generation !== refreshGeneration || requestedProjectId !== projectId) return;
+			machines = result;
 			if (selectedMachineId && !machines.some((machine) => machine.id === selectedMachineId)) {
 				selectedMachineId = '';
 			}
 		} catch (cause) {
-			if (!silent) loadError = cause instanceof Error ? cause.message : String(cause);
+			if (generation === refreshGeneration && !silent) {
+				loadError = cause instanceof Error ? cause.message : String(cause);
+			}
 		} finally {
-			refreshInFlight = false;
+			if (generation === refreshGeneration) refreshInFlight = false;
 		}
 	}
 
