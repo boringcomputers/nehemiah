@@ -231,10 +231,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p guest-image-input
+          # guest-agent is its own Go module (there is no module at the repo
+          # root), so build inside it with -C and emit to an absolute path.
           env CGO_ENABLED=0 GOOS=linux GOARCH="${{ matrix.arch }}" \
             GOFLAGS=-mod=readonly \
-            go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
-            -o guest-image-input/bc-guest-agent ./guest-agent
+            go build -C guest-agent -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+            -o "$PWD/guest-image-input/bc-guest-agent" .
 
       - name: Build and inspect immutable guest images twice
         env:
