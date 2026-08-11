@@ -161,7 +161,9 @@ log "Signed offline package cohort verified."
 # --------------------------------------------------------------------------
 log "Verifying KVM support..."
 [ -e /dev/kvm ] || die "/dev/kvm not present - box lacks nested/hardware virtualization"
-[ -r /dev/kvm ] && [ -w /dev/kvm ] || warn "/dev/kvm not read/write for root? continuing"
+if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+  warn "/dev/kvm not read/write for root? continuing"
+fi
 
 if grep -Eqw '(vmx|svm)' /proc/cpuinfo; then
   log "CPU virtualization extensions (vmx/svm) present."
