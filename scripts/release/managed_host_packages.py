@@ -12,6 +12,7 @@ import argparse
 import datetime as dt
 import gzip
 import hashlib
+import http.client
 import json
 import lzma
 import os
@@ -184,10 +185,12 @@ def download(url: str, output: pathlib.Path, max_bytes: int) -> None:
     opener = urllib.request.build_opener(StrictHTTPSRedirect())
     request = urllib.request.Request(url, headers={"User-Agent": "nehemiah-release-builder/1"})
     # snapshot.ubuntu.com load balancers flap with 5xx bursts that span
-    # minutes, so retry transient server and network failures with a capped
-    # backoff patient enough to bridge them. Policy failures raise SystemExit
-    # and are never retried, and every download is digest-verified afterward,
-    # so retries cannot alter the closure.
+    # minutes, so retry transient server and network failures — including
+    # bodies truncated mid-stream, which surface as http.client exceptions
+    # rather than OSError — with a capped backoff patient enough to bridge
+    # them. Policy failures raise SystemExit and are never retried, and every
+    # download is digest-verified afterward, so retries cannot alter the
+    # closure.
     last_error: Exception | None = None
     for attempt in range(8):
         if attempt:
@@ -209,7 +212,7 @@ def download(url: str, output: pathlib.Path, max_bytes: int) -> None:
             if error.code < 500:
                 fail(f"snapshot download failed: {error}")
             last_error = error
-        except (OSError, urllib.error.URLError) as error:
+        except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
             output.unlink(missing_ok=True)
             last_error = error
     else:
