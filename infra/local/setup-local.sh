@@ -3,6 +3,10 @@
 # setup-local.sh — run a full Nehemiah host locally on an Apple Silicon
 # Mac, inside a Lima nested-virt Linux VM (which is where /dev/kvm lives).
 #
+# DESCOPED — this self-serve path is no longer supported. Host bootstrap installs
+# only signed managed-release artifacts, which this Lima flow cannot supply; it now
+# exits with a pointer to the managed runbook (../latitude/README.md).
+#
 # From the repo root on your Mac:
 #   NEHEMIAH_ANTHROPIC_KEY=sk-ant-...  ./infra/local/setup-local.sh
 #

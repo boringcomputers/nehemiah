@@ -3,6 +3,10 @@
 # setup.sh — turn a fresh Ubuntu 24.04 box (x86_64 or arm64) with /dev/kvm into a
 # running nehemiahd (the Nehemiah host daemon), end to end, from your laptop.
 #
+# DESCOPED — this self-serve path is no longer supported. Host bootstrap installs
+# only signed managed-release artifacts, which this script cannot supply; it now
+# exits with a pointer to the managed runbook (infra/latitude/README.md).
+#
 # Provider-agnostic: works on any such box you can root-SSH into (Latitude,
 # Hetzner, a bare-metal, a nested-virt VM, …). Idempotent — safe to re-run.
 #
