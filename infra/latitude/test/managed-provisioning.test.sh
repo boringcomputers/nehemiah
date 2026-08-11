@@ -4,6 +4,15 @@ set +x
 umask 077
 
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# The signed-release pipeline (scripts/release/) ships in its own stack slice.
+# When this checkout does not contain it, its invariants cannot be asserted
+# here, so those checks are skipped loudly instead of failing on missing files.
+if [[ -f "$REPOSITORY_ROOT/scripts/release/build.mjs" ]]; then
+  RELEASE_PIPELINE_PRESENT=1
+else
+  RELEASE_PIPELINE_PRESENT=0
+  echo "note: scripts/release/ is not in this checkout; skipping release-pipeline assertions" >&2
+fi
 TASK_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/managed-provisioning-test.XXXXXX")"
 FAKE_API_PID=""
 cleanup() {
@@ -701,8 +710,10 @@ if grep -Fq '${SCRIPT_DIR}' "$REPOSITORY_ROOT/infra/latitude/bootstrap.sh"; then
   echo "managed bootstrap success path references an undefined SCRIPT_DIR" >&2
   exit 1
 fi
-grep -Fq '"ipset"' \
-  "$REPOSITORY_ROOT/scripts/release/managed-host-packages-policy.json"
+if [[ "$RELEASE_PIPELINE_PRESENT" == 1 ]]; then
+  grep -Fq '"ipset"' \
+    "$REPOSITORY_ROOT/scripts/release/managed-host-packages-policy.json"
+fi
 grep -Fxq 'port=0' "$REPOSITORY_ROOT/infra/latitude/net-setup.sh"
 grep -Fxq 'KillMode=control-group' "$REPOSITORY_ROOT/infra/latitude/nehemiahd.service"
 
@@ -898,7 +909,8 @@ grep -Fq '/root/infra/nehemiahd-local.service' "$REPOSITORY_ROOT/infra/setup.sh"
 grep -Fq '/root/infra/boring-net-local.service' "$REPOSITORY_ROOT/infra/local/setup-local.sh"
 grep -Fq '/root/infra/nehemiahd-local.service' "$REPOSITORY_ROOT/infra/local/setup-local.sh"
 grep -Fq '"${SCRIPT_DIR}/nehemiahd-local.service"' "$REPOSITORY_ROOT/infra/latitude/deploy.sh"
-if grep -Eq '(boring-net|nehemiahd)-local\.service' "$REPOSITORY_ROOT/scripts/release/build.mjs"; then
+if [[ "$RELEASE_PIPELINE_PRESENT" == 1 ]] \
+  && grep -Eq '(boring-net|nehemiahd)-local\.service' "$REPOSITORY_ROOT/scripts/release/build.mjs"; then
   echo "prototype systemd unit entered the signed managed-host archive" >&2
   exit 1
 fi
@@ -929,21 +941,27 @@ if grep -Fq 'nameserver 1.1.1.1' \
 fi
 
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck \
-    "$REPOSITORY_ROOT/infra/latitude/bootstrap.sh" \
-    "$REPOSITORY_ROOT/infra/latitude/build-rootfs.sh" \
-    "$REPOSITORY_ROOT/infra/latitude/cloud-init.sh" \
-    "$REPOSITORY_ROOT/infra/latitude/managed-host-preflight.sh" \
-    "$REPOSITORY_ROOT/infra/latitude/net-setup.sh" \
-    "$REPOSITORY_ROOT/infra/latitude/provision.sh" \
-    "$REPOSITORY_ROOT/infra/latitude/render-user-data.sh" \
-    "$REPOSITORY_ROOT/scripts/release/fetch-managed-runtime-assets.sh" \
-    "$REPOSITORY_ROOT/scripts/release/inspect-managed-runtime-assets.sh" \
-    "$REPOSITORY_ROOT/scripts/release/build-guest-images.sh" \
-    "$REPOSITORY_ROOT/scripts/release/guest-images/assemble-rootfs.sh" \
-    "$REPOSITORY_ROOT/scripts/release/guest-images/inspect-guest-image.sh" \
-    "$REPOSITORY_ROOT/scripts/release/guest-images/prepare-vulnerability-scanner.sh" \
-    "$REPOSITORY_ROOT/scripts/release/guest-images/scan-final-rootfs.sh"
+  shellcheck_targets=(
+    "$REPOSITORY_ROOT/infra/latitude/bootstrap.sh"
+    "$REPOSITORY_ROOT/infra/latitude/build-rootfs.sh"
+    "$REPOSITORY_ROOT/infra/latitude/cloud-init.sh"
+    "$REPOSITORY_ROOT/infra/latitude/managed-host-preflight.sh"
+    "$REPOSITORY_ROOT/infra/latitude/net-setup.sh"
+    "$REPOSITORY_ROOT/infra/latitude/provision.sh"
+    "$REPOSITORY_ROOT/infra/latitude/render-user-data.sh"
+  )
+  if [[ "$RELEASE_PIPELINE_PRESENT" == 1 ]]; then
+    shellcheck_targets+=(
+      "$REPOSITORY_ROOT/scripts/release/fetch-managed-runtime-assets.sh"
+      "$REPOSITORY_ROOT/scripts/release/inspect-managed-runtime-assets.sh"
+      "$REPOSITORY_ROOT/scripts/release/build-guest-images.sh"
+      "$REPOSITORY_ROOT/scripts/release/guest-images/assemble-rootfs.sh"
+      "$REPOSITORY_ROOT/scripts/release/guest-images/inspect-guest-image.sh"
+      "$REPOSITORY_ROOT/scripts/release/guest-images/prepare-vulnerability-scanner.sh"
+      "$REPOSITORY_ROOT/scripts/release/guest-images/scan-final-rootfs.sh"
+    )
+  fi
+  shellcheck "${shellcheck_targets[@]}"
 fi
 
 printf 'managed Latitude provisioning tests passed\n'
