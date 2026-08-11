@@ -183,15 +183,15 @@ def download(url: str, output: pathlib.Path, max_bytes: int) -> None:
         fail("unsafe snapshot download URL")
     opener = urllib.request.build_opener(StrictHTTPSRedirect())
     request = urllib.request.Request(url, headers={"User-Agent": "nehemiah-release-builder/1"})
-    # snapshot.ubuntu.com intermittently answers 5xx; retry transient server
-    # and network failures with backoff, mirroring the curl fetchers'
-    # --retry 3. Policy failures raise SystemExit and are never retried, and
-    # every download is digest-verified afterward, so retries cannot alter
-    # the closure.
+    # snapshot.ubuntu.com load balancers flap with 5xx bursts that span
+    # minutes, so retry transient server and network failures with a capped
+    # backoff patient enough to bridge them. Policy failures raise SystemExit
+    # and are never retried, and every download is digest-verified afterward,
+    # so retries cannot alter the closure.
     last_error: Exception | None = None
-    for attempt in range(4):
+    for attempt in range(8):
         if attempt:
-            time.sleep(2**attempt)
+            time.sleep(min(30, 2**attempt))
         try:
             with opener.open(request, timeout=60) as response, output.open("xb") as stream:
                 total = 0
