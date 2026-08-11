@@ -264,6 +264,10 @@ async function buildCliArtifact() {
     "--target=node20",
     "--format=esm",
     "--packages=bundle",
+    // The credential store loads the napi-rs keyring at runtime; its native
+    // .node binding cannot be bundled, so it stays the package's single
+    // runtime dependency and npm resolves the platform binding on install.
+    "--external:@napi-rs/keyring",
     "--legal-comments=external",
     `--outfile=${path.join(packageDirectory, "dist/cli.js")}`,
   ]);
@@ -303,6 +307,9 @@ async function buildCliArtifact() {
     bin: cliPackage.bin,
     files: ["dist", "README.md", "LICENSE", "NOTICE"],
     engines: cliPackage.engines,
+    dependencies: {
+      "@napi-rs/keyring": cliPackage.dependencies["@napi-rs/keyring"],
+    },
   };
   await writeFile(
     path.join(packageDirectory, "package.json"),
