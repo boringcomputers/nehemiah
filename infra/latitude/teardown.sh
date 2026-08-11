@@ -5,13 +5,15 @@
 # This is destructive and irreversible: the box (and everything on it) is gone.
 # Use it when you're done with the prototype so the ~$0.52/hr meter stops.
 #
-# Config from ~/.config/latitude/:
-#   - api_key:    read from LATITUDE_API_KEY (env or ~/.config/latitude/server.env),
-#                 or from the file ~/.config/latitude/api_key
+# State is read from the same directory provision.sh writes its recovery
+# records to: LATITUDE_STATE_DIR, else $XDG_CONFIG_HOME/latitude, else
+# ~/.config/latitude. Within that directory:
+#   - api_key:    read from LATITUDE_API_KEY (env or server.env), or from the
+#                 file named by LATITUDE_API_KEY_FILE (default <state>/api_key)
 #   - server_id:  read from LATITUDE_SERVER_ID / SERVER_ID (env or server.env),
-#                 or from the file ~/.config/latitude/server_id
+#                 or from the file <state>/server_id
 #   - hostname:   fallback recovery when no server_id is known — read from
-#                 LATITUDE_HOSTNAME or ~/.config/latitude/last-created-hostname,
+#                 LATITUDE_HOSTNAME or <state>/last-created-hostname,
 #                 then resolved to a unique server via the Latitude API.
 #                 When the server_id came from the state file and a hostname
 #                 record exists, both must agree (verified via the provider)
@@ -25,16 +27,22 @@
 #
 set -euo pipefail
 
-CONF_DIR="${HOME}/.config/latitude"
+# Must match the state-directory precedence in provision.sh, or a server
+# provisioned with an alternate state location cannot be found and the
+# hourly-billed host keeps running.
+CONF_DIR="${LATITUDE_STATE_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/latitude}"
 ENV_FILE="${CONF_DIR}/server.env"
+API_KEY_FILE="${LATITUDE_API_KEY_FILE:-${CONF_DIR}/api_key}"
 
 usage() {
   cat <<'EOF'
 Usage: infra/latitude/teardown.sh
 
 DELETES the Latitude.sh server via API to stop billing. Prompts for
-confirmation (type "yes"). Reads api_key and server_id from
-~/.config/latitude/ (server.env or api_key/server_id files).
+confirmation (type "yes"). Reads api_key and server_id from the same state
+directory provision.sh writes to — LATITUDE_STATE_DIR, else
+$XDG_CONFIG_HOME/latitude, else ~/.config/latitude (server.env or
+api_key/server_id files).
 EOF
 }
 
@@ -50,8 +58,8 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 API_KEY="${LATITUDE_API_KEY:-}"
-if [[ -z "${API_KEY}" && -f "${CONF_DIR}/api_key" ]]; then
-  API_KEY="$(tr -d '[:space:]' < "${CONF_DIR}/api_key")"
+if [[ -z "${API_KEY}" && -f "${API_KEY_FILE}" ]]; then
+  API_KEY="$(tr -d '[:space:]' < "${API_KEY_FILE}")"
 fi
 
 SERVER_ID="${LATITUDE_SERVER_ID:-${SERVER_ID:-}}"
@@ -62,7 +70,7 @@ if [[ -z "${SERVER_ID}" && -f "${CONF_DIR}/server_id" ]]; then
 fi
 
 if [[ -z "${API_KEY}" ]]; then
-  echo "error: no API key found. Set LATITUDE_API_KEY in ${ENV_FILE} or create ${CONF_DIR}/api_key." >&2
+  echo "error: no API key found. Set LATITUDE_API_KEY in ${ENV_FILE} or create ${API_KEY_FILE}." >&2
   exit 1
 fi
 

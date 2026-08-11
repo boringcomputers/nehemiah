@@ -459,6 +459,79 @@ assert events[3]["user_data"] == "ud_test1234"
 assert events[3]["billing"] == "hourly"
 PY
 
+# Teardown must read the same state directory provisioning wrote: a server
+# created under LATITUDE_STATE_DIR or XDG_CONFIG_HOME has to be discovered and
+# deleted by a no-argument teardown, or the hourly-billed host keeps running.
+# Teardown pins the production API base, so the provider is stubbed at the
+# curl boundary; HOME points at an empty directory so a regression to the
+# hard-coded ~/.config/latitude path cannot pass.
+teardown_bin="$TASK_TEMP/teardown-bin"
+mkdir -p "$teardown_bin"
+cat > "$teardown_bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${TEARDOWN_CURL_LOG:?}"
+output="" method=GET url="" hostname=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    -o) output="${args[$((i + 1))]}"; i=$((i + 1)) ;;
+    -w | -H) i=$((i + 1)) ;;
+    -X) method="${args[$((i + 1))]}"; i=$((i + 1)) ;;
+    --data-urlencode)
+      case "${args[$((i + 1))]}" in
+        "filter[hostname]="*) hostname="${args[$((i + 1))]#"filter[hostname]="}" ;;
+      esac
+      i=$((i + 1))
+      ;;
+    -*) ;;
+    *) url="${args[$i]}" ;;
+  esac
+done
+printf '%s %s%s\n' "$method" "$url" "${hostname:+ $hostname}" >> "$TEARDOWN_CURL_LOG"
+if [[ "$method" == DELETE ]]; then
+  : > "$output"
+  printf '204'
+else
+  printf '{"data":[{"id":"sv_test1234","attributes":{"hostname":"%s"}}]}' \
+    "$hostname" > "$output"
+  printf '200'
+fi
+EOF
+chmod 0755 "$teardown_bin/curl"
+
+recorded_hostname="$(< "$TASK_TEMP/state/last-created-hostname")"
+mkdir -p "$TASK_TEMP/xdg-home/latitude"
+cp "$TASK_TEMP/state/server_id" "$TASK_TEMP/state/last-created-hostname" \
+  "$TASK_TEMP/xdg-home/latitude/"
+for alternate_state in state-dir xdg-config; do
+  teardown_curl_log="$TASK_TEMP/teardown-curl-$alternate_state.log"
+  : > "$teardown_curl_log"
+  teardown_env=()
+  case "$alternate_state" in
+    state-dir) teardown_env+=("LATITUDE_STATE_DIR=$TASK_TEMP/state") ;;
+    xdg-config) teardown_env+=("XDG_CONFIG_HOME=$TASK_TEMP/xdg-home") ;;
+  esac
+  env PATH="$teardown_bin:$PATH" \
+    TEARDOWN_CURL_LOG="$teardown_curl_log" \
+    LATITUDE_API_KEY=latitude-test-api-key-1234567890 \
+    HOME="$TASK_TEMP/empty-home" \
+    "${teardown_env[@]}" \
+    "$REPOSITORY_ROOT/infra/latitude/teardown.sh" <<< "yes" \
+    > "$TASK_TEMP/teardown-$alternate_state.stdout" \
+    2> "$TASK_TEMP/teardown-$alternate_state.stderr"
+  assert_no_secret_output "$TASK_TEMP/teardown-$alternate_state.stdout"
+  assert_no_secret_output "$TASK_TEMP/teardown-$alternate_state.stderr"
+  grep -Fq 'Billing stopped' "$TASK_TEMP/teardown-$alternate_state.stdout"
+  # The file-sourced id must be verified against the recorded hostname before
+  # the delete, and exactly one delete of the recovered server must be issued.
+  [[ "$(sed -n '1p' "$teardown_curl_log")" == \
+    "GET https://api.latitude.sh/servers ${recorded_hostname}" ]]
+  [[ "$(sed -n '2p' "$teardown_curl_log")" == \
+    "DELETE https://api.latitude.sh/servers/sv_test1234" ]]
+  [[ "$(wc -l < "$teardown_curl_log")" -eq 2 ]]
+done
+
 # A valid but unapproved opaque image id must fail before user-data creation or
 # a billable server POST. The sole additional provider request is inventory GET.
 sed 's/^LATITUDE_OS_ID=.*/LATITUDE_OS_ID=os_missing1234/' \
@@ -512,7 +585,7 @@ grep -Fq 'already uses hostname' "$TASK_TEMP/collision.stderr"
 
 for script in \
   bootstrap.sh build-desktop-rootfs.sh build-rootfs.sh cloud-init.sh managed-host-preflight.sh net-setup.sh \
-  provision.sh render-user-data.sh verify-isolation.sh; do
+  provision.sh render-user-data.sh teardown.sh verify-isolation.sh; do
   bash -n "$REPOSITORY_ROOT/infra/latitude/$script"
 done
 grep -Fq 'minisign -Vm' "$REPOSITORY_ROOT/infra/latitude/cloud-init.sh"
@@ -949,6 +1022,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     "$REPOSITORY_ROOT/infra/latitude/net-setup.sh"
     "$REPOSITORY_ROOT/infra/latitude/provision.sh"
     "$REPOSITORY_ROOT/infra/latitude/render-user-data.sh"
+    "$REPOSITORY_ROOT/infra/latitude/teardown.sh"
   )
   if [[ "$RELEASE_PIPELINE_PRESENT" == 1 ]]; then
     shellcheck_targets+=(
