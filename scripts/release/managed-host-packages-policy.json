@@ -1,0 +1,69 @@
+{
+  "contractVersion": 1,
+  "operatingSystem": {
+    "id": "ubuntu",
+    "version": "24.04",
+    "codename": "noble"
+  },
+  "snapshot": {
+    "baseUrl": "https://snapshot.ubuntu.com/ubuntu/20260809T000000Z",
+    "capturedAt": "2026-08-09T00:00:00Z",
+    "maxAgeHours": 168,
+    "suites": {
+      "noble": {
+        "inReleaseSha256": "cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0"
+      },
+      "noble-security": {
+        "inReleaseSha256": "9935b55fc2cc85be31979f7c515c228a2a29642349544109b49462b448d52b93"
+      },
+      "noble-updates": {
+        "inReleaseSha256": "a74574fbfde481e4fcef9e16c99f1a2cb43e03b2982c475490c188fae90b0908"
+      }
+    }
+  },
+  "components": [
+    "main",
+    "universe"
+  ],
+  "architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "rootPackages": [
+    "apt",
+    "bash",
+    "ca-certificates",
+    "coreutils",
+    "cpio",
+    "curl",
+    "dnsmasq",
+    "e2fsprogs",
+    "file",
+    "findutils",
+    "gawk",
+    "grep",
+    "gzip",
+    "iproute2",
+    "ipset",
+    "iptables",
+    "jq",
+    "kmod",
+    "minisign",
+    "openssl",
+    "passwd",
+    "procps",
+    "python3",
+    "systemd",
+    "systemd-sysv",
+    "tar",
+    "util-linux",
+    "wireguard-tools"
+  ],
+  "limits": {
+    "maxArchiveBytes": 268435456,
+    "maxIndexBytes": 33554432,
+    "maxPackageBytes": 67108864,
+    "maxPackageCount": 256,
+    "maxUnpackedBytes": 1073741824
+  }
+}
