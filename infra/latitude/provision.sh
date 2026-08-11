@@ -397,18 +397,28 @@ latitude_request POST /servers "$WORK_DIR/create-server.json" \
 # lookup when the id cannot be validated from the response body.
 mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
-# A new (billable) host now exists, so any previously recorded server_id is stale
-# and must not mask this one during teardown. Clear it before persisting the new
-# recovery inputs: if parsing the id below fails, teardown falls through to
-# hostname recovery for THIS host instead of deleting the prior server.
-rm -f -- "$STATE_DIR/server_id"
-printf '%s\n' "$HOSTNAME_VALUE" > "$WORK_DIR/last-created-hostname"
-chmod 0600 "$WORK_DIR/last-created-hostname"
-mv -- "$WORK_DIR/last-created-hostname" "$STATE_DIR/last-created-hostname"
+# Commit the new host's recovery record before touching the previously recorded
+# server_id: clearing first would open a window (a kill between the rm and the
+# rename) where the state directory identifies NO host at all and teardown could
+# not discover the one that is now billing. The record is staged inside
+# STATE_DIR so the final mv is an atomic rename (WORK_DIR may be on another
+# filesystem).
+hostname_record_tmp="$(mktemp "$STATE_DIR/.last-created-hostname.XXXXXX")"
+printf '%s\n' "$HOSTNAME_VALUE" > "$hostname_record_tmp"
+chmod 0600 "$hostname_record_tmp"
+mv -- "$hostname_record_tmp" "$STATE_DIR/last-created-hostname"
 raw_creation_tmp="$(mktemp "$STATE_DIR/.created-server.XXXXXX")"
 cp -- "$WORK_DIR/create-server-response.json" "$raw_creation_tmp"
 chmod 0600 "$raw_creation_tmp"
 mv -- "$raw_creation_tmp" "$STATE_DIR/last-created-server.json"
+# Only now drop the stale server_id — this host is already recoverable by
+# hostname. Clearing before the id parse below keeps the parse-failure path
+# safe: teardown falls through to hostname recovery for THIS host instead of
+# deleting the prior server. (A kill before this rm leaves the stale id
+# alongside the new hostname record, which teardown would target first; that
+# state is recoverable — remove the server_id file and rerun teardown — unlike
+# a window holding no record of the new host at all.)
+rm -f -- "$STATE_DIR/server_id"
 log "persisted recovery inputs (hostname + raw response) under $STATE_DIR for teardown"
 if ! SERVER_ID="$(python3 - "$WORK_DIR/create-server-response.json" <<'PY'
 import json
