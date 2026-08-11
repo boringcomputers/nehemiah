@@ -6,8 +6,15 @@
 # Run as root on the target box:
 #     sudo bash infra/latitude/bootstrap.sh
 #
-# Idempotent and safe to re-run. Installs firecracker + jailer, fetches a
-# firecracker-compatible uncompressed kernel, and builds the base Alpine rootfs.
+# Idempotent and safe to re-run. Installs Firecracker, jailer, and the kernel
+# from local artifacts already verified against the signed release. Production
+# guest images must also have been installed by cloud-init.
+#
+# MANAGED HOSTS ONLY. This installs exclusively from signed managed-release
+# artifacts and requires the managed-release inputs below (NEHEMIAH_RELEASE_VERSION,
+# the signed archive/kernel, and the managed-host package cohort). It is driven by
+# infra/latitude/provision.sh + cloud-init; the self-serve infra/setup.sh and
+# infra/local/setup-local.sh flows do not satisfy this contract and refuse to run it.
 #
 set -euo pipefail
 
@@ -22,30 +29,19 @@ ROOTFS_DIR="${NEHEMIAH_ROOT}/rootfs"
 RUN_DIR="${NEHEMIAH_ROOT}/run"
 TEMPLATE_DIR="${NEHEMIAH_ROOT}/templates"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-GITHUB_API="https://api.github.com/repos/firecracker-microvm/firecracker/releases/latest"
+: "${NEHEMIAH_FIRECRACKER_ARCHIVE:?signed release Firecracker archive is required}"
+: "${NEHEMIAH_FIRECRACKER_SHA256:?signed manifest Firecracker SHA-256 is required}"
+: "${NEHEMIAH_KERNEL_IMAGE:?signed release kernel image is required}"
+: "${NEHEMIAH_KERNEL_SHA256:?signed manifest kernel SHA-256 is required}"
+: "${NEHEMIAH_FIRECRACKER_INSTALLED_SHA256:?signed installed Firecracker SHA-256 is required}"
+: "${NEHEMIAH_JAILER_INSTALLED_SHA256:?signed installed jailer SHA-256 is required}"
+: "${NEHEMIAH_RELEASE_VERSION:?signed release version is required}"
+: "${NEHEMIAH_RUNTIME_PYTHON_SHA256:?signed python rootfs SHA-256 is required}"
+: "${NEHEMIAH_RUNTIME_DESKTOP_SHA256:?signed desktop rootfs SHA-256 is required}"
 
 # Arch — firecracker + kernel artifacts differ between x86_64 and aarch64. uname's
 # names (x86_64 / aarch64) match firecracker's release naming, so ARCH drives both.
 ARCH="$(uname -m)"
-
-# Kernel candidate URLs (arch-specific), tried in order. First one that downloads
-# AND passes the "file" ELF/Linux-kernel check wins.
-case "${ARCH}" in
-  x86_64)
-    KERNEL_URLS=(
-      "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.11/x86_64/vmlinux-6.1.128"
-      "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/vmlinux-6.1.102"
-      "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
-    ) ;;
-  aarch64)
-    KERNEL_URLS=(
-      "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.12/aarch64/vmlinux-6.1.128"
-      "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/aarch64/vmlinux-6.1.102"
-      "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/aarch64/kernels/vmlinux.bin"
-    ) ;;
-esac
 
 # --------------------------------------------------------------------------
 # Logging helpers
@@ -53,6 +49,73 @@ esac
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bootstrap:warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[bootstrap:error]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# The first identity in nehemiahd's bounded per-VM UID/GID pool has a named
+# bootstrap account. Every other slot remains numeric-only. Never hide account
+# creation errors: a stale name or an unrelated owner of either numeric id is a
+# host-identity collision and must abort provisioning.
+ensure_boringjail_account() {
+  local account_name=boringjail expected_uid=30000 expected_gid=30000
+  local expected_home=/nonexistent expected_shell=/usr/sbin/nologin
+  local group_by_name group_by_id user_by_name user_by_id password_status
+  local name uid gid gecos home shell members extra status
+
+  lookup_record() {
+    local database="$1" key="$2" destination="$3" output lookup_status
+    set +e
+    output="$(getent "$database" "$key" 2>/dev/null)"
+    lookup_status=$?
+    set -e
+    case "$lookup_status" in
+      0) [[ -n "$output" && "$output" != *$'\n'* ]] || die "ambiguous ${database} identity for ${key}" ;;
+      2) output="" ;;
+      *) die "cannot query ${database} identity for ${key}" ;;
+    esac
+    printf -v "$destination" '%s' "$output"
+  }
+
+  lookup_record group "$account_name" group_by_name
+  lookup_record group "$expected_gid" group_by_id
+  if [[ -z "$group_by_name" && -z "$group_by_id" ]]; then
+    groupadd --gid "$expected_gid" "$account_name" \
+      || die "cannot create the managed jailer group"
+  elif [[ -z "$group_by_name" || -z "$group_by_id" || "$group_by_name" != "$group_by_id" ]]; then
+    die "managed jailer group name or gid is already owned by another identity"
+  fi
+  lookup_record group "$account_name" group_by_name
+  lookup_record group "$expected_gid" group_by_id
+  IFS=: read -r name _ gid members extra <<<"$group_by_name"
+  [[ "$group_by_name" == "$group_by_id" && "$name" == "$account_name" && \
+    "$gid" == "$expected_gid" && -z "$members" && -z "$extra" ]] \
+    || die "managed jailer group does not match the signed host contract"
+
+  lookup_record passwd "$account_name" user_by_name
+  lookup_record passwd "$expected_uid" user_by_id
+  if [[ -z "$user_by_name" && -z "$user_by_id" ]]; then
+    useradd --uid "$expected_uid" --gid "$expected_gid" --no-create-home \
+      --home-dir "$expected_home" --shell "$expected_shell" --comment "" "$account_name" \
+      || die "cannot create the managed jailer account"
+  elif [[ -z "$user_by_name" || -z "$user_by_id" || "$user_by_name" != "$user_by_id" ]]; then
+    die "managed jailer account name or uid is already owned by another identity"
+  fi
+  lookup_record passwd "$account_name" user_by_name
+  lookup_record passwd "$expected_uid" user_by_id
+  IFS=: read -r name _ uid gid gecos home shell extra <<<"$user_by_name"
+  [[ "$user_by_name" == "$user_by_id" && "$name" == "$account_name" && \
+    "$uid" == "$expected_uid" && "$gid" == "$expected_gid" && -z "$gecos" && \
+    "$home" == "$expected_home" && "$shell" == "$expected_shell" && -z "$extra" ]] \
+    || die "managed jailer account does not match the signed host contract"
+
+  password_status="$(passwd --status "$account_name" 2>/dev/null)" \
+    || die "cannot verify that the managed jailer account is locked"
+  read -r name status extra <<<"$password_status"
+  [[ "$name" == "$account_name" && "$status" == "L" ]] \
+    || die "managed jailer account must remain password-locked"
+
+  install -d -o root -g root -m 0755 /srv/jailer
+  [[ "$(stat -c '%a:%u:%g' /srv/jailer)" == "755:0:0" ]] \
+    || die "managed jailer chroot base must be root-owned mode 0755"
+}
 
 # --------------------------------------------------------------------------
 # Preconditions
@@ -65,23 +128,42 @@ case "${ARCH}" in
 esac
 log "Target arch: ${ARCH}"
 
+for digest in \
+  "${NEHEMIAH_FIRECRACKER_SHA256}" "${NEHEMIAH_KERNEL_SHA256}" \
+  "${NEHEMIAH_FIRECRACKER_INSTALLED_SHA256}" "${NEHEMIAH_JAILER_INSTALLED_SHA256}" \
+  "${NEHEMIAH_RUNTIME_PYTHON_SHA256}" "${NEHEMIAH_RUNTIME_DESKTOP_SHA256}"; do
+  [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || die "signed manifest contains an invalid SHA-256"
+done
+for asset in "${NEHEMIAH_FIRECRACKER_ARCHIVE}" "${NEHEMIAH_KERNEL_IMAGE}"; do
+  [[ -f "${asset}" && ! -L "${asset}" && -s "${asset}" ]] \
+    || die "signed release runtime input is missing or unsafe"
+done
+[[ "$(stat -c %s "${NEHEMIAH_FIRECRACKER_ARCHIVE}")" -le 16777216 ]] \
+  || die "signed release Firecracker archive exceeds its size policy"
+[[ "$(stat -c %s "${NEHEMIAH_KERNEL_IMAGE}")" -le 67108864 ]] \
+  || die "signed release kernel exceeds its size policy"
+
+ASSET_WORK="$(mktemp -d /var/tmp/nehemiah-assets.XXXXXX)"
+trap 'rm -rf -- "${ASSET_WORK}"' EXIT
+
 # --------------------------------------------------------------------------
-# 1. Packages
+# 1. Signed offline package cohort
 # --------------------------------------------------------------------------
-log "Updating apt and installing dependencies..."
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y --no-install-recommends \
-  curl ca-certificates jq e2fsprogs iproute2 iptables cpio util-linux \
-  git build-essential file debootstrap
-log "Dependencies installed."
+package_arch=amd64
+[[ "$ARCH" == aarch64 ]] && package_arch=arm64
+python3 /opt/boring/bin/managed-host-packages verify-installed \
+  --arch "$package_arch" --release-version "$NEHEMIAH_RELEASE_VERSION" \
+  || die "signed managed-host package cohort is missing or has drifted"
+log "Signed offline package cohort verified."
 
 # --------------------------------------------------------------------------
 # 2. KVM verification + ip_forward
 # --------------------------------------------------------------------------
 log "Verifying KVM support..."
 [ -e /dev/kvm ] || die "/dev/kvm not present - box lacks nested/hardware virtualization"
-[ -r /dev/kvm ] && [ -w /dev/kvm ] || warn "/dev/kvm not read/write for root? continuing"
+if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+  warn "/dev/kvm not read/write for root? continuing"
+fi
 
 if grep -Eqw '(vmx|svm)' /proc/cpuinfo; then
   log "CPU virtualization extensions (vmx/svm) present."
@@ -93,7 +175,18 @@ log "Enabling net.ipv4.ip_forward..."
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 # Persist across reboots (idempotent).
 if [ -d /etc/sysctl.d ]; then
-  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-boring.conf
+  cat > /etc/sysctl.d/99-nehemiah.conf <<'EOF'
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.accept_redirects=0
+net.ipv4.conf.default.accept_redirects=0
+net.ipv4.conf.all.send_redirects=0
+net.ipv4.conf.default.send_redirects=0
+net.ipv4.conf.all.route_localnet=0
+net.ipv4.conf.default.route_localnet=0
+kernel.unprivileged_bpf_disabled=1
+fs.protected_fifos=2
+fs.protected_regular=2
+EOF
 fi
 
 # --------------------------------------------------------------------------
@@ -101,120 +194,127 @@ fi
 # --------------------------------------------------------------------------
 log "Creating ${NEHEMIAH_ROOT} layout..."
 mkdir -p "${BIN_DIR}" "${KERNEL_DIR}" "${ROOTFS_DIR}" "${RUN_DIR}" "${TEMPLATE_DIR}"
+install -d -m0700 /var/lib/nehemiahd
 
-# Jailer prerequisites: the chroot base + the unprivileged uid/gid the jailer
-# drops firecracker into (NEHEMIAH_JAILER=1). Without these, jailed boots fail with
+# Jailer prerequisites: the chroot base + the first unprivileged uid/gid in the
+# per-machine pool. Without these, jailed boots fail with
 # "Canonicalize(/srv/jailer)" / "fc.sock did not appear".
-mkdir -p /srv/jailer
-groupadd -g 991 boringjail 2>/dev/null || true
-useradd -u 30000 -g 991 -M -s /usr/sbin/nologin boringjail 2>/dev/null || true
+ensure_boringjail_account
 
 # --------------------------------------------------------------------------
 # 4. Install firecracker + jailer
 # --------------------------------------------------------------------------
 install_firecracker() {
-  if [ -x "${BIN_DIR}/firecracker" ] && "${BIN_DIR}/firecracker" --version >/dev/null 2>&1; then
-    log "firecracker already installed: $("${BIN_DIR}/firecracker" --version | head -n1)"
-    return 0
-  fi
+  local extracted="${ASSET_WORK}/firecracker"
+  mkdir -p "${extracted}"
+  log "Installing the retained signed-release Firecracker archive..."
+  printf '%s  %s\n' "${NEHEMIAH_FIRECRACKER_SHA256}" "${NEHEMIAH_FIRECRACKER_ARCHIVE}" \
+    | sha256sum --check --strict --status \
+    || die "signed release Firecracker checksum verification failed"
+  python3 - "${NEHEMIAH_FIRECRACKER_ARCHIVE}" "${extracted}" <<'PY'
+import pathlib
+import sys
+import tarfile
 
-  log "Resolving latest firecracker release tag from GitHub API..."
-  local tag
-  tag="$(curl -fsSL "${GITHUB_API}" | jq -r '.tag_name')"
-  [ -n "${tag}" ] && [ "${tag}" != "null" ] || die "could not resolve firecracker release tag"
-  log "Latest firecracker tag: ${tag}"
+archive, destination = sys.argv[1:]
+with tarfile.open(archive, "r:gz") as bundle:
+    members = bundle.getmembers()
+    if not members or len(members) > 128 or sum(member.size for member in members) > 256 * 1024 * 1024:
+        raise SystemExit("Firecracker archive exceeds extraction bounds")
+    seen = set()
+    for member in members:
+        path = pathlib.PurePosixPath(member.name)
+        canonical = str(path)
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or canonical in seen
+            or not (member.isdir() or member.isfile())
+        ):
+            raise SystemExit("Firecracker archive contains an unsafe entry")
+        seen.add(canonical)
+    bundle.extractall(destination, members=members, filter="data")
+PY
 
-  local tmp
-  tmp="$(mktemp -d)"
-  # Ensure temp dir is cleaned up on any exit from this function's subshell scope.
-  trap 'rm -rf "${tmp}"' RETURN
-
-  local tgz="${tmp}/firecracker.tgz"
-  local url="https://github.com/firecracker-microvm/firecracker/releases/download/${tag}/firecracker-${tag}-${ARCH}.tgz"
-  log "Downloading ${url}"
-  curl -fSL --retry 3 -o "${tgz}" "${url}" || die "failed to download firecracker release tarball"
-
-  log "Extracting release tarball..."
-  tar -xzf "${tgz}" -C "${tmp}"
-
-  # Layout inside tarball: release-<tag>-<arch>/firecracker-<tag>-<arch> and jailer-<tag>-<arch>
-  local rel_dir="${tmp}/release-${tag}-${ARCH}"
-  local fc_bin="${rel_dir}/firecracker-${tag}-${ARCH}"
-  local jail_bin="${rel_dir}/jailer-${tag}-${ARCH}"
-
-  # Fall back to a glob search if the expected path differs.
-  if [ ! -f "${fc_bin}" ]; then
-    fc_bin="$(find "${tmp}" -type f -name "firecracker-*-${ARCH}" ! -name '*.debug' | head -n1)"
-  fi
-  if [ ! -f "${jail_bin}" ]; then
-    jail_bin="$(find "${tmp}" -type f -name "jailer-*-${ARCH}" ! -name '*.debug' | head -n1)"
-  fi
-
-  [ -f "${fc_bin}" ]   || die "firecracker binary not found in release tarball"
-  [ -f "${jail_bin}" ] || warn "jailer binary not found in release tarball (continuing without jailer)"
+  local -a firecracker_bins jailer_bins
+  mapfile -t firecracker_bins < <(find "${extracted}" -type f -name "firecracker-*-${ARCH}" ! -name '*.debug' | sort)
+  mapfile -t jailer_bins < <(find "${extracted}" -type f -name "jailer-*-${ARCH}" ! -name '*.debug' | sort)
+  [ "${#firecracker_bins[@]}" -eq 1 ] || die "Firecracker archive has an unexpected binary set"
+  [ "${#jailer_bins[@]}" -eq 1 ] || die "Firecracker archive has an unexpected jailer set"
+  local fc_bin="${firecracker_bins[0]}"
+  local jail_bin="${jailer_bins[0]}"
+  [[ "$(sha256sum "$fc_bin" | cut -d' ' -f1)" == "$NEHEMIAH_FIRECRACKER_INSTALLED_SHA256" ]] \
+    || die "installed Firecracker digest does not match the signed cohort"
+  [[ "$(sha256sum "$jail_bin" | cut -d' ' -f1)" == "$NEHEMIAH_JAILER_INSTALLED_SHA256" ]] \
+    || die "installed jailer digest does not match the signed cohort"
+  local expected_machine="x86-64"
+  [[ "${ARCH}" == aarch64 ]] && expected_machine="ARM aarch64"
+  for binary in "${fc_bin}" "${jail_bin}"; do
+    local description
+    description="$(file -b "${binary}")"
+    [[ "${description}" == *"ELF 64-bit LSB"* && \
+        "${description}" == *"${expected_machine}"* ]] \
+      || die "Firecracker archive contains a wrong-architecture binary"
+  done
 
   install -m 0755 "${fc_bin}" "${BIN_DIR}/firecracker"
-  [ -f "${jail_bin}" ] && install -m 0755 "${jail_bin}" "${BIN_DIR}/jailer"
+  install -m 0755 "${jail_bin}" "${BIN_DIR}/jailer"
 
   log "firecracker installed: $("${BIN_DIR}/firecracker" --version | head -n1)"
 }
 install_firecracker
 
 # --------------------------------------------------------------------------
-# 5. Fetch an uncompressed firecracker-compatible kernel
+# 5. Install the retained uncompressed Firecracker-compatible kernel
 # --------------------------------------------------------------------------
 kernel_is_valid() {
   local path="$1"
   [ -s "${path}" ] || return 1
-  # Accept ELF or "Linux kernel x86 boot executable" (vmlinux.bin bzImage form).
   local desc
   desc="$(file -b "${path}" 2>/dev/null || true)"
-  case "${desc}" in
-    *ELF*)                       return 0 ;;
-    *"Linux kernel x86 boot"*)   return 0 ;;
-    *boot*executable*)           return 0 ;;
-    *) return 1 ;;
-  esac
+  if [[ "${ARCH}" == x86_64 ]]; then
+    [[ "${desc}" == *"Linux kernel x86 boot executable"* || \
+        ( "${desc}" == *"ELF 64-bit LSB"* && "${desc}" == *"x86-64"* ) ]]
+  else
+    [[ "${desc}" == *"Linux kernel ARM64 boot executable"* || \
+        ( "${desc}" == *"ELF 64-bit LSB"* && "${desc}" == *"ARM aarch64"* ) ]]
+  fi
 }
 
 install_kernel() {
-  if kernel_is_valid "${KERNEL_PATH}"; then
-    log "Kernel already present and valid: ${KERNEL_PATH} ($(file -b "${KERNEL_PATH}"))"
-    return 0
-  fi
-
-  local url
-  for url in "${KERNEL_URLS[@]}"; do
-    log "Trying kernel URL: ${url}"
-    local tmp
-    tmp="$(mktemp)"
-    if curl -fSL --retry 2 -o "${tmp}" "${url}"; then
-      if kernel_is_valid "${tmp}"; then
-        install -m 0644 "${tmp}" "${KERNEL_PATH}"
-        rm -f "${tmp}"
-        log "Kernel installed from ${url}: $(file -b "${KERNEL_PATH}")"
-        return 0
-      else
-        warn "Downloaded file did not look like a kernel: $(file -b "${tmp}")"
-      fi
-    else
-      warn "Download failed: ${url}"
-    fi
-    rm -f "${tmp}"
-  done
-
-  die "Could not fetch a valid kernel from any candidate URL.
-      Please supply a firecracker-compatible uncompressed kernel at:
-        ${KERNEL_PATH}
-      (e.g. build one with the firecracker kernel config, or copy a known-good vmlinux.)"
+  log "Installing the retained signed-release guest kernel..."
+  printf '%s  %s\n' "${NEHEMIAH_KERNEL_SHA256}" "${NEHEMIAH_KERNEL_IMAGE}" \
+    | sha256sum --check --strict --status \
+    || die "signed release kernel checksum verification failed"
+  kernel_is_valid "${NEHEMIAH_KERNEL_IMAGE}" \
+    || die "signed release kernel has an invalid architecture or executable format"
+  install -m 0644 "${NEHEMIAH_KERNEL_IMAGE}" "${KERNEL_PATH}"
+  log "Kernel installed: $(file -b "${KERNEL_PATH}")"
 }
 install_kernel
 
 # --------------------------------------------------------------------------
-# 6. Build base rootfs
+# 6. Require both signed guest images
 # --------------------------------------------------------------------------
-log "Building base rootfs (build-rootfs.sh)..."
-bash "${SCRIPT_DIR}/build-rootfs.sh"
+rootfs_is_ext4() {
+  local image="$1" magic
+  [[ -f "$image" && ! -L "$image" && -s "$image" ]] || return 1
+  magic="$(dd if="$image" bs=1 skip=1080 count=2 status=none | od -An -tx1 | tr -d ' \n')"
+  [[ "$magic" == 53ef ]] || return 1
+  file -b "$image" | grep -q 'ext4 filesystem data'
+}
+for image_and_digest in \
+  "${ROOTFS_DIR}/rootfs.ext4:${NEHEMIAH_RUNTIME_PYTHON_SHA256}" \
+  "${ROOTFS_DIR}/desktop.ext4:${NEHEMIAH_RUNTIME_DESKTOP_SHA256}"; do
+  image="${image_and_digest%%:*}"
+  expected_digest="${image_and_digest##*:}"
+  rootfs_is_ext4 "$image" \
+    || die "required signed guest image is missing or invalid: $image"
+  [[ "$(sha256sum "$image" | cut -d' ' -f1)" == "$expected_digest" ]] \
+    || die "required signed guest image checksum mismatch: $image"
+  e2fsck -fn "$image" >/dev/null \
+    || die "required signed guest image failed filesystem validation: $image"
+done
 
 # --------------------------------------------------------------------------
 # 7. Success banner
@@ -228,18 +328,9 @@ cat <<BANNER
   jailer      : $([ -x "${BIN_DIR}/jailer" ] && "${BIN_DIR}/jailer" --version 2>/dev/null | head -n1 || echo "(not installed)")
   kernel      : ${KERNEL_PATH} ($(file -b "${KERNEL_PATH}"))
   rootfs      : ${ROOTFS_DIR}/rootfs.ext4 ($(du -h "${ROOTFS_DIR}/rootfs.ext4" 2>/dev/null | cut -f1))
+  desktop     : ${ROOTFS_DIR}/desktop.ext4 ($(du -h "${ROOTFS_DIR}/desktop.ext4" 2>/dev/null | cut -f1))
   run dir     : ${RUN_DIR}
   templates   : ${TEMPLATE_DIR}
-----------------------------------------------------------------------------
-  NEXT STEPS:
-    1. (optional) Build the python snapshot template:
-         sudo bash ${SCRIPT_DIR}/build-template.sh python
-    2. Deploy the nehemiahd binary to /usr/local/bin/nehemiahd
-    3. (optional) Set a token:  echo 'NEHEMIAH_TOKEN=...' > /etc/boring/nehemiahd.env
-    4. Install the service:
-         install -m0644 ${SCRIPT_DIR}/nehemiahd.service /etc/systemd/system/nehemiahd.service
-         systemctl daemon-reload && systemctl enable --now nehemiahd
-    5. Verify:  curl -s http://localhost:8080/healthz | jq
 ============================================================================
 
 BANNER

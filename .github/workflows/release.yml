@@ -1,0 +1,562 @@
+name: Release artifacts
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/release/**"
+      - "docs/nehemiah/distribution.md"
+      - "infra/latitude/**"
+      - "packages/cli/**"
+      - "packages/sdk/**"
+      - "nehemiahd/**"
+      - "guest-agent/**"
+      - "gateway/**"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package version to build without publishing
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release inputs
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out the source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Check release scripts and workflow policy
+        run: |
+          set -euo pipefail
+          find scripts/release -type f -name '*.mjs' -print0 | sort -z | xargs -0 -n1 node --check
+          node --test scripts/release/test/*.test.mjs
+          node scripts/release/check.mjs
+          bash infra/latitude/test/managed-provisioning.test.sh
+          npx --no-install prettier --check .github/workflows/ci.yml .github/workflows/release.yml 'scripts/release/**/*.mjs' docs/nehemiah/distribution.md infra/latitude/README.md
+
+      - name: Check CLI and SDK
+        run: |
+          npm run check --workspace nehemiah-sdk
+          npm run test --workspace nehemiah-sdk
+          # The CLI imports the SDK's published surface (dist/), so build it
+          # before type-checking the CLI against it.
+          npm run build --workspace nehemiah-sdk
+          npm run check --workspace nehemiah-cli
+          npm run test --workspace nehemiah-cli
+
+      - name: Resolve exact release version
+        id: version
+        env:
+          RELEASE_INPUT_VERSION: ${{ inputs.version }}
+        run: node scripts/release/resolve-version.mjs
+
+      - name: Verify signed annotated tag before build
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          evidence_dir="$(mktemp -d)"
+          trap 'rm -rf "$evidence_dir"' EXIT
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" > "$evidence_dir/ref.json"
+          tag_object="$(jq -er '.object.sha' "$evidence_dir/ref.json")"
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > "$evidence_dir/tag.json"
+          node scripts/release/verify-tag.mjs \
+            --ref "$evidence_dir/ref.json" \
+            --tag "$evidence_dir/tag.json" \
+            --expected-tag "$GITHUB_REF_NAME" \
+            --expected-commit "$(git rev-parse HEAD)"
+
+      - name: Authorize protected default-branch CI for the exact tag commit
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release/authorize-ci.sh
+
+      - name: Require immutable GitHub Releases before build
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')" = "true"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists" >&2
+            exit 1
+          fi
+
+  build:
+    name: Build deterministic release artifacts
+    needs:
+      - validate
+      - guest-images
+      - host-packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: nehemiahd/go.mod
+          cache-dependency-path: |
+            nehemiahd/go.sum
+            guest-agent/go.sum
+            gateway/go.sum
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Download deterministic guest images
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-guest-images-*
+          path: guest-images
+          merge-multiple: true
+
+      - name: Download deterministic managed-host package repositories
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-host-packages-*
+          path: host-packages
+          merge-multiple: true
+
+      - name: Fetch and inspect retained managed runtime assets
+        run: scripts/release/fetch-managed-runtime-assets.sh managed-runtime-assets
+
+      - name: Build static binaries and CLI package
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/build.mjs \
+            --version "$RELEASE_VERSION" \
+            --out release-dist \
+            --source-date-epoch "$(git show -s --format=%ct HEAD)" \
+            --commit "$(git rev-parse HEAD)" \
+            --repository "$GITHUB_REPOSITORY" \
+            --guest-images guest-images \
+            --host-packages host-packages \
+            --runtime-assets managed-runtime-assets
+
+          node scripts/release/build.mjs \
+            --version "$RELEASE_VERSION" \
+            --out release-dist-repeat \
+            --source-date-epoch "$(git show -s --format=%ct HEAD)" \
+            --commit "$(git rev-parse HEAD)" \
+            --repository "$GITHUB_REPOSITORY" \
+            --guest-images guest-images \
+            --host-packages host-packages \
+            --runtime-assets managed-runtime-assets
+          diff --recursive --no-dereference release-dist release-dist-repeat
+          rm -rf release-dist-repeat
+
+      - name: Verify immutable checksum set
+        run: node scripts/release/verify.mjs --directory release-dist
+
+      - name: Retain build-only artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-build-${{ needs.validate.outputs.version }}
+          path: release-dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  guest-images:
+    name: Build ${{ matrix.arch }} signed guest images
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: guest-agent/go.mod
+          cache-dependency-path: guest-agent/go.sum
+
+      - name: Build native static guest agent
+        run: |
+          set -euo pipefail
+          mkdir -p guest-image-input
+          # guest-agent is its own Go module (there is no module at the repo
+          # root), so build inside it with -C and emit to an absolute path.
+          env CGO_ENABLED=0 GOOS=linux GOARCH="${{ matrix.arch }}" \
+            GOFLAGS=-mod=readonly \
+            go build -C guest-agent -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+            -o "$PWD/guest-image-input/bc-guest-agent" .
+
+      - name: Build and inspect immutable guest images twice
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/release/build-guest-images.sh \
+            --version "$RELEASE_VERSION" \
+            --arch "${{ matrix.arch }}" \
+            --output guest-images \
+            --source-date-epoch "$(git show -s --format=%ct HEAD)" \
+            --guest-agent guest-image-input/bc-guest-agent
+
+      - name: Retain exact guest image inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-guest-images-${{ matrix.arch }}
+          path: |
+            guest-images/*.ext4.gz
+            guest-images/*.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  host-packages:
+    name: Build ${{ matrix.arch }} offline managed-host packages
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build and inspect the immutable package closure twice
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir host-packages host-packages-repeat
+          artifact="nehemiah-host-packages_${RELEASE_VERSION}_ubuntu24.04_linux_${{ matrix.arch }}.tar.gz"
+          for output in host-packages host-packages-repeat; do
+            scripts/release/build-managed-host-packages.sh \
+              --version "$RELEASE_VERSION" \
+              --arch "${{ matrix.arch }}" \
+              --source-date-epoch "$(git show -s --format=%ct HEAD)" \
+              --output "$output/$artifact"
+            scripts/release/inspect-managed-host-packages.sh \
+              --archive "$output/$artifact" \
+              --version "$RELEASE_VERSION" \
+              --arch "${{ matrix.arch }}"
+          done
+          cmp --silent "host-packages/$artifact" "host-packages-repeat/$artifact"
+
+          wrong_arch=arm64
+          if [[ "${{ matrix.arch }}" == arm64 ]]; then
+            wrong_arch=amd64
+          fi
+          if scripts/release/inspect-managed-host-packages.sh \
+            --archive "host-packages/$artifact" \
+            --version "$RELEASE_VERSION" \
+            --arch "$wrong_arch"; then
+            echo "package inspector accepted the wrong architecture" >&2
+            exit 1
+          fi
+          wrong_version=0.0.0
+          if [[ "$RELEASE_VERSION" == 0.0.0 ]]; then
+            wrong_version=0.0.1
+          fi
+          if scripts/release/inspect-managed-host-packages.sh \
+            --archive "host-packages/$artifact" \
+            --version "$wrong_version" \
+            --arch "${{ matrix.arch }}"; then
+            echo "package inspector accepted the wrong release version" >&2
+            exit 1
+          fi
+          cp "host-packages/$artifact" host-packages-repeat/tampered.tar.gz
+          truncate --size=-1 host-packages-repeat/tampered.tar.gz
+          if scripts/release/inspect-managed-host-packages.sh \
+            --archive host-packages-repeat/tampered.tar.gz \
+            --version "$RELEASE_VERSION" \
+            --arch "${{ matrix.arch }}"; then
+            echo "package inspector accepted a truncated archive" >&2
+            exit 1
+          fi
+
+      - name: Retain exact managed-host package repository
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-host-packages-${{ matrix.arch }}
+          path: host-packages/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  attest:
+    name: Attest tag-authorized artifacts
+    if: github.event_name == 'push'
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out release verification code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Reauthorize protected default-branch CI before attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release/authorize-ci.sh
+
+      - name: Download checksummed build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-build-${{ needs.validate.outputs.version }}
+          path: release-dist
+
+      - name: Verify immutable checksum set before signing
+        run: node scripts/release/verify.mjs --directory release-dist
+
+      - name: Attest every checksummed artifact and manifest
+        id: attest_artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: release-dist/SHA256SUMS
+
+      - name: Attest checksum metadata
+        id: attest_checksums
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-dist/SHA256SUMS
+
+      - name: Bundle offline provenance
+        run: |
+          cp "${{ steps.attest_artifacts.outputs.bundle-path }}" release-dist/artifact-provenance.sigstore.json
+          cp "${{ steps.attest_checksums.outputs.bundle-path }}" release-dist/checksums-provenance.sigstore.json
+
+      - name: Verify the exact attested payload
+        run: >-
+          node scripts/release/verify.mjs
+          --directory release-dist
+          --allow-unchecksummed artifact-provenance.sigstore.json,checksums-provenance.sigstore.json
+
+      - name: Retain attested release payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: attested-release-${{ needs.validate.outputs.version }}
+          path: release-dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish signed immutable GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - validate
+      - attest
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+      attestations: read
+    steps:
+      - name: Check out the authorized tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Reauthorize protected default-branch CI before signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release/authorize-ci.sh
+
+      - name: Download attested payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: attested-release-${{ needs.validate.outputs.version }}
+          path: release-dist
+
+      - name: Verify checksums, tag signature, and provenance before publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/release/verify.mjs \
+            --directory release-dist \
+            --allow-unchecksummed artifact-provenance.sigstore.json,checksums-provenance.sigstore.json
+
+          evidence_dir="$(mktemp -d)"
+          trap 'rm -rf "$evidence_dir"' EXIT
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" > "$evidence_dir/ref.json"
+          tag_object="$(jq -er '.object.sha' "$evidence_dir/ref.json")"
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > "$evidence_dir/tag.json"
+          node scripts/release/verify-tag.mjs \
+            --ref "$evidence_dir/ref.json" \
+            --tag "$evidence_dir/tag.json" \
+            --expected-tag "$GITHUB_REF_NAME" \
+            --expected-commit "$(git rev-parse HEAD)"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')" = "true"
+
+          while read -r _ artifact; do
+            gh attestation verify "release-dist/$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "$GITHUB_REF" \
+              --deny-self-hosted-runners
+          done < release-dist/SHA256SUMS
+          gh attestation verify release-dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "$GITHUB_REF" \
+            --deny-self-hosted-runners
+
+      - name: Sign checksum metadata for managed hosts
+        env:
+          MINISIGN_SECRET_KEY_B64: ${{ secrets.NEHEMIAH_RELEASE_MINISIGN_SECRET_KEY_B64 }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.NEHEMIAH_RELEASE_MINISIGN_PUBLIC_KEY }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          set +x
+          : "${MINISIGN_SECRET_KEY_B64:?release environment is missing the Minisign secret key}"
+          [[ "$MINISIGN_PUBLIC_KEY" =~ ^RW[A-Za-z0-9+/]{54}$ ]] || {
+            echo "release environment has an invalid Minisign public key" >&2
+            exit 1
+          }
+
+          signing_dir="$(mktemp -d)"
+          cleanup_signing_key() {
+            shred -u "$signing_dir/minisign.key" 2>/dev/null || true
+            rm -rf "$signing_dir"
+          }
+          trap cleanup_signing_key EXIT
+
+          minisign_deb="$signing_dir/minisign_0.11-1_amd64.deb"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://archive.ubuntu.com/ubuntu/pool/universe/m/minisign/minisign_0.11-1_amd64.deb \
+            -o "$minisign_deb"
+          printf '%s  %s\n' \
+            854c5f9dddaa99a02915f8cacd41e03442cb6cda25f7bbc53c0a3d297bcd064f \
+            "$minisign_deb" | sha256sum --check --strict --status
+          sudo dpkg --install "$minisign_deb"
+
+          printf '%s' "$MINISIGN_SECRET_KEY_B64" | base64 --decode \
+            > "$signing_dir/minisign.key"
+          chmod 0600 "$signing_dir/minisign.key"
+          unset MINISIGN_SECRET_KEY_B64
+          minisign -R -s "$signing_dir/minisign.key" -p "$signing_dir/minisign.pub"
+          [[ "$(tail -n 1 "$signing_dir/minisign.pub")" == "$MINISIGN_PUBLIC_KEY" ]] || {
+            echo "configured Minisign public key does not match the signing key" >&2
+            exit 1
+          }
+          minisign -S -W \
+            -s "$signing_dir/minisign.key" \
+            -m release-dist/SHA256SUMS \
+            -x release-dist/SHA256SUMS.minisig \
+            -c "Boring Computers release checksums" \
+            -t "version=$RELEASE_VERSION commit=$GITHUB_SHA"
+          minisign -Vm release-dist/SHA256SUMS \
+            -x release-dist/SHA256SUMS.minisig \
+            -P "$MINISIGN_PUBLIC_KEY"
+          node scripts/release/verify.mjs \
+            --directory release-dist \
+            --allow-unchecksummed artifact-provenance.sigstore.json,checksums-provenance.sigstore.json,SHA256SUMS.minisig
+
+      - name: Create immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/verify.mjs \
+            --directory release-dist \
+            --allow-unchecksummed artifact-provenance.sigstore.json,checksums-provenance.sigstore.json,SHA256SUMS.minisig
+          assets=(
+            release-dist/SHA256SUMS
+            release-dist/SHA256SUMS.minisig
+            release-dist/artifact-provenance.sigstore.json
+            release-dist/checksums-provenance.sigstore.json
+          )
+          while read -r _ artifact; do
+            assets+=("release-dist/$artifact")
+          done < release-dist/SHA256SUMS
+          release_flags=()
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            "${release_flags[@]}"
+
+      - name: Verify signed immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if gh release verify "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "GitHub did not produce a valid immutable release attestation" >&2
+          exit 1

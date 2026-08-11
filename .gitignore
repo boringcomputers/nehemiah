@@ -37,6 +37,7 @@ test-results
 
 # SDK build output
 packages/sdk/dist/
+apps/nehemiah/dist/
 
 # Claude runtime
 .claude/

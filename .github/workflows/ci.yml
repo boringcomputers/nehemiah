@@ -7,47 +7,129 @@ on:
 
 jobs:
   go:
-    name: nehemiahd (vet + build, amd64 + arm64)
+    name: host + guest agents (test, vet, build)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: nehemiahd
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: nehemiahd/go.mod
-          cache-dependency-path: nehemiahd/go.sum
+          cache-dependency-path: |
+            nehemiahd/go.sum
+            guest-agent/go.sum
+      - run: go test -race ./...
       - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
       - run: go build ./...
       # The infra ships to x86_64 and arm64 hosts (and the Mac/Lima local path
       # is arm64) — keep both compiling.
       - run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+      - name: Test and vet guest agent
+        working-directory: guest-agent
+        run: go test -race ./... && go vet ./... && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Build guest agent (amd64 + arm64)
+        working-directory: guest-agent
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
+      - name: Test, vet, and build public gateway
+        working-directory: gateway
+        run: go test -race ./... && go vet ./... && go build ./... && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
-  web:
-    name: web + sdk (check, lint, tests)
+  workspace:
+    name: workspace (check, lint, test, build)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nehemiah_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nehemiah_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm audit --audit-level=high
+      - name: Check release authorization and artifact policy
+        run: |
+          set -euo pipefail
+          find scripts/release -type f -name '*.mjs' -print0 | sort -z | xargs -0 -n1 node --check
+          node --test scripts/release/test/*.test.mjs
+          node scripts/release/check.mjs
+          npx --no-install prettier --check .github/workflows/ci.yml .github/workflows/release.yml 'scripts/release/**/*.mjs' docs/nehemiah/distribution.md
       # The web workspace's vitest browser-mode project drives real chromium.
       - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm run lint
-      - run: npm test -w nehemiah-sdk
-      - run: npm test -w web
-      - run: npm run build -w nehemiah-sdk
+      - run: npm test
+      - run: npm run build
+      - name: Apply control-plane migration to a fresh PostgreSQL database
+        # The second pass proves migrations are replay-safe and that every
+        # applied file has the expected immutable checksum.
+        run: npm run migrate -w @nehemiah/nehemiah && npm run migrate -w @nehemiah/nehemiah
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nehemiah_ci
+      # Run the complete control-plane suite with DATABASE_URL set. Tests that
+      # are safely skipped during a no-database developer run (tenant HTTP,
+      # lifecycle, fork, volume, quota, and usage integration) must execute in CI.
+      # PostgreSQL fixtures deliberately share the one freshly migrated database;
+      # serialize files so one suite's global worker/cleanup cannot mutate another
+      # suite's tenant while it is asserting append-only audit and usage records.
+      - name: Run complete control-plane suite against PostgreSQL
+        run: npm test -w @nehemiah/nehemiah -- --no-file-parallelism
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/nehemiah_ci
+          NEHEMIAH_DB_ROLE_TEST: "1"
+
+  wire-contract:
+    name: generated wire contract (drift, type-check, compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.12.12
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 1.25.0
+          cache: false
+      - run: npm ci
+      - run: npm -w apps/nehemiah run build
+      - name: Check generated model drift
+        run: node scripts/openapi-models.mjs --check
+      - name: Type-check generated TypeScript model
+        run: npx tsc --noEmit --target ES2023 --module NodeNext --moduleResolution NodeNext generated/openapi/typescript/models.ts
+      - name: Compile generated Python model
+        run: python -m py_compile generated/openapi/python/models.py
+      - name: Format and test generated Go model
+        run: |
+          gofmt -d generated/openapi/go/models.go | tee "$RUNNER_TEMP/openapi-models-gofmt.diff"
+          test ! -s "$RUNNER_TEMP/openapi-models-gofmt.diff"
+          GO111MODULE=off go test ./generated/openapi/go
 
   shell:
     name: infra scripts (shellcheck)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Errors only — the scripts are heavy on intentional word-splitting and
       # ssh-heredoc patterns that trip stylistic levels.
-      - run: shellcheck -S error infra/*.sh infra/latitude/*.sh infra/local/*.sh
+      - run: shellcheck -S error infra/*.sh infra/latitude/*.sh infra/local/*.sh scripts/release/authorize-ci.sh

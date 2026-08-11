@@ -195,7 +195,10 @@ const observationIntegrityReason = (
 	if (observation.kind === 'final') {
 		const terminal = ['stopping', 'stopped', 'failed', 'lost'].includes(identity.state);
 		if (observation.quality === 'exact') {
-			if (!terminal && receivedAt.getTime() < identity.expires_at.getTime() - maximumExactFinalLeadMs) {
+			if (
+				!terminal &&
+				receivedAt.getTime() < identity.expires_at.getTime() - maximumExactFinalLeadMs
+			) {
 				return 'premature_final';
 			}
 		} else if (!terminal) {

@@ -40,50 +40,42 @@ thing yourself.
 
 ## Run your own
 
-You need a machine that can run Firecracker — a Linux box with `/dev/kvm`, **or
-just your Mac**:
-
-**On a Linux box** — Ubuntu 24.04, **x86_64 or arm64**, with `/dev/kvm`
-(bare-metal, or a VM with nested virtualization) that you can root-SSH into. One
-command turns it into a running nehemiahd:
+Nehemiah runs as a managed cloud: hosts are provisioned from **signed release
+artifacts** onto machines the control plane enrolls, not from a local source
+build. The supported path stands up one approved
+[Latitude.sh](https://latitude.sh) bare-metal host from a published `v<version>`
+release:
 
 ```sh
 git clone https://github.com/boringcomputers/nehemiah
 cd nehemiah && npm install
 
-# set it up on your box (installs Firecracker, builds the images, runs nehemiahd)
-NEHEMIAH_ANTHROPIC_KEY=sk-ant-...  ./infra/setup.sh root@YOUR_BOX_IP
+# provision one managed host from a signed release (needs operator inputs — see the runbook)
+infra/latitude/provision.sh --config "${XDG_CONFIG_HOME:-$HOME/.config}/nehemiah/latitude-host.env"
 ```
 
-Don't have a box? If you use [Latitude.sh](https://latitude.sh),
-[`infra/latitude/provision.sh`](infra/latitude/provision.sh) creates one for you
-first. Any other provider works too — just point `setup.sh` at it.
+Follow [`infra/latitude/README.md`](infra/latitude/README.md) for the full
+managed-host runbook: the signed-release trust boundary, the one-use enrollment
+grant, the WireGuard overlay, and the canary checks to run before admitting
+workloads. Tear a host back down (and stop billing) with
+[`infra/latitude/teardown.sh`](infra/latitude/teardown.sh).
 
-**On an Apple Silicon Mac** (M3 or later) — no server needed. One command builds
-the whole arm64 stack in a nested-virt [Lima](https://lima-vm.io) VM; real
-microVMs boot on your laptop (a shell restores from snapshot in ~5 ms):
+> **The earlier self-serve one-command installers are no longer supported.**
+> `infra/setup.sh` (a Linux box over SSH) and `infra/local/setup-local.sh` (an
+> Apple Silicon Mac in Lima) built the host from source, but host bootstrap now
+> installs Firecracker, the jailer, and the kernel only from signed
+> managed-release artifacts, which those scripts cannot supply. They now exit with
+> a pointer to the managed runbook above.
 
-```sh
-brew install lima
-NEHEMIAH_ANTHROPIC_KEY=sk-ant-...  ./infra/local/setup-local.sh
-# nehemiahd is now at http://localhost:8088 — details in infra/local/README.md
-```
-
-(Windows 11 via WSL2 is designed but not yet wired up — see
-[`infra/local/README.md`](infra/local/README.md).)
-
-Then run the site against it:
+Then run the site against your host:
 
 ```sh
 # apps/web/.env
-PUBLIC_NEHEMIAH_URL=http://YOUR_BOX_IP:8080   # or a tunnel — see apps/web/.env.example
+PUBLIC_NEHEMIAH_URL=http://YOUR_HOST_IP:8080   # or a tunnel — see apps/web/.env.example
 npm run dev -w web
 ```
 
-`setup.sh` options (env): `NEHEMIAH_TOKEN` (require auth), `NEHEMIAH_S3_*`
-(persistent volumes), `BIND_LOCALHOST=1` (reach it only via SSH tunnel — most
-private), `SKIP_DESKTOP=1` (skip the ~8-min desktop image). Full REST + WebSocket
-API in the [docs](https://boringcomputers.com/docs).
+Full REST + WebSocket API in the [docs](https://boringcomputers.com/docs).
 
 **From any AI** — an MCP server
 ([`nehemiah-mcp`](packages/mcp)) lets Claude Desktop, Cursor, and other
@@ -110,8 +102,9 @@ Real hardware-virtualized isolation — a kernel per machine, not a shared
 container. Each VM is jailed and resource-capped, restored from a memory
 snapshot in ~3 ms, and self-destructs on a TTL (or runs until you stop it, when
 the server enables `NEHEMIAH_ALLOW_PERSISTENT`). Guests are network-isolated
-behind an egress firewall. The host daemon is [`nehemiahd/`](nehemiahd) (Go); host
-setup is one command ([`infra/setup.sh`](infra/setup.sh)).
+behind an egress firewall. The host daemon is [`nehemiahd/`](nehemiahd) (Go);
+hosts are provisioned from a signed release via the managed runbook
+([`infra/latitude/`](infra/latitude)).
 
 ## Repo
 
@@ -122,8 +115,7 @@ apps/web/          the site — SvelteKit
 nehemiahd/           the host daemon — Go, runs the microVMs
 packages/sdk/      nehemiah-sdk — Effect-native TypeScript client
 packages/mcp/      nehemiah-mcp — MCP server
-infra/setup.sh     one-command host setup (any Ubuntu + KVM box)
-infra/latitude/    rootfs/kernel/image builds, networking, Caddy, Latitude helpers
+infra/latitude/    managed-host provisioning (provision/teardown), image builds, networking
 ```
 
 ```sh

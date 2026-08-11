@@ -3,6 +3,10 @@
 # setup.sh — turn a fresh Ubuntu 24.04 box (x86_64 or arm64) with /dev/kvm into a
 # running nehemiahd (the Nehemiah host daemon), end to end, from your laptop.
 #
+# DESCOPED — this self-serve path is no longer supported. Host bootstrap installs
+# only signed managed-release artifacts, which this script cannot supply; it now
+# exits with a pointer to the managed runbook (infra/latitude/README.md).
+#
 # Provider-agnostic: works on any such box you can root-SSH into (Latitude,
 # Hetzner, a bare-metal, a nested-virt VM, …). Idempotent — safe to re-run.
 #
@@ -32,6 +36,14 @@ GO_VERSION="1.25.0"
 log() { printf '\033[1;34m[setup]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[setup:error]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# --- self-serve local bootstrap is descoped ---------------------------------
+# infra/latitude/bootstrap.sh installs Firecracker/jailer/kernel only from signed
+# managed-release artifacts (it requires NEHEMIAH_RELEASE_VERSION, the signed
+# archive/kernel inputs, and the managed-host package cohort). This self-serve
+# script cannot stage or forward that signed contract into the remote host, so it
+# is disabled rather than fail cryptically part-way through provisioning.
+die "self-serve local bootstrap is no longer supported: bootstrap.sh installs only from signed managed-release artifacts, which this script cannot supply. Provision managed hosts with infra/latitude/provision.sh + cloud-init (see infra/latitude/README.md)."
+
 # --- 0. preflight ------------------------------------------------------------
 log "Preflight on ${TARGET}…"
 "${SSH[@]}" 'true' || die "can't SSH to ${TARGET}"
@@ -44,14 +56,16 @@ esac
 [[ "${KVM}" == "yes" ]] || die "/dev/kvm missing — the box needs hardware/nested virtualization"
 log "  ok: Ubuntu ${ID:-?} ${ARCH} with /dev/kvm"
 
-# --- 1. ship infra scripts + nehemiahd source ----------------------------------
-log "Copying infra scripts + nehemiahd source…"
-"${SSH[@]}" 'mkdir -p /root/infra /opt/boring/src'
+# --- 1. ship infra scripts + host/guest agent source --------------------------
+log "Copying infra scripts + nehemiahd/guest-agent source…"
+"${SSH[@]}" 'mkdir -p /root/infra /opt/boring/bin /opt/boring/src /opt/boring/guest-agent-src'
 scp -q -o StrictHostKeyChecking=accept-new \
 	"${REPO_ROOT}"/infra/latitude/*.sh "${REPO_ROOT}"/infra/latitude/*.service \
 	"${REPO_ROOT}"/infra/latitude/Caddyfile "${TARGET}:/root/infra/"
 rsync -az --delete -e "ssh -o StrictHostKeyChecking=accept-new" \
 	--exclude '*_test.go' "${REPO_ROOT}/nehemiahd/" "${TARGET}:/opt/boring/src/"
+rsync -az --delete -e "ssh -o StrictHostKeyChecking=accept-new" \
+	--exclude '*_test.go' "${REPO_ROOT}/guest-agent/" "${TARGET}:/opt/boring/guest-agent-src/"
 
 # --- 2. install Go (matching go.mod) -----------------------------------------
 log "Ensuring Go ${GO_VERSION}…"
@@ -61,10 +75,12 @@ if ! /usr/local/go/bin/go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
   rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz && rm -f /tmp/go.tgz
 fi
 /usr/local/go/bin/go version
+cd /opt/boring/guest-agent-src
+CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o /opt/boring/bin/bc-guest-agent .
 EOF
 
 # --- 3. bootstrap: firecracker, jailer, kernel, base rootfs ------------------
-log "Bootstrap (firecracker + jailer + kernel + base rootfs)…"
+log "Bootstrap (firecracker + jailer + kernel + guest-agent rootfs)…"
 "${SSH[@]}" 'bash /root/infra/bootstrap.sh'
 
 # --- 4. build the guest images + snapshot ------------------------------------
@@ -84,7 +100,7 @@ log "Setting up guest networking…"
 "${SSH[@]}" bash -euo pipefail <<'EOF'
 install -m0755 /root/infra/net-setup.sh /opt/boring/bin/net-setup.sh
 bash /opt/boring/bin/net-setup.sh
-cp /root/infra/boring-net.service /etc/systemd/system/ 2>/dev/null || true
+cp /root/infra/boring-net-local.service /etc/systemd/system/boring-net.service 2>/dev/null || true
 systemctl daemon-reload && systemctl enable boring-net.service 2>/dev/null || true
 EOF
 
@@ -94,7 +110,7 @@ log "Building + installing nehemiahd…"
 cd /opt/boring/src
 CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o /usr/local/bin/nehemiahd .
 ln -sfn /usr/local/bin/nehemiahd /usr/local/bin/boringd   # pre-rename name keeps working
-cp /root/infra/nehemiahd.service /etc/systemd/system/nehemiahd.service
+cp /root/infra/nehemiahd-local.service /etc/systemd/system/nehemiahd.service
 EOF
 
 log "Writing config (secrets not printed)…"

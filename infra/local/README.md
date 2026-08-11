@@ -1,28 +1,20 @@
-# Running Nehemiah locally (Mac & Windows)
+# Running Nehemiah locally (Mac & Windows) — descoped
 
-**The Mac path is built and proven** — one command
-([`setup-local.sh`](setup-local.sh)) turns an Apple Silicon Mac into a boring
-computers host (in a Lima nested-virt VM), and a real arm64 Firecracker microVM
-boots on it in **~5 ms**. Windows is designed but not yet wired up (it's the
-easier path — see below).
+> **This self-serve local path is no longer supported.** `setup-local.sh` built
+> the host stack from source in a Lima VM, but host bootstrap now installs
+> Firecracker, the jailer, and the kernel only from **signed managed-release
+> artifacts**, which a local build cannot supply. `infra/local/setup-local.sh`
+> now exits with a pointer to the managed runbook. Provision a managed host from a
+> signed release instead — see [`../latitude/README.md`](../latitude/README.md).
+>
+> The rest of this document is retained as a record of the local architecture (how
+> a Mac or Windows box can host a KVM-capable Linux guest), in case a
+> local-artifact bootstrap mode is built in the future.
 
 nehemiahd runs Firecracker microVMs, which need **Linux + a functional `/dev/kvm`**.
 Neither macOS nor Windows provides that natively, but both can host a Linux VM
 that _does_ — Firecracker needs only **one** level of nested virtualization, which
 modern Macs and Windows 11 both expose.
-
-## Quickstart (Mac)
-
-```sh
-brew install lima                                  # once
-NEHEMIAH_ANTHROPIC_KEY=sk-ant-... ./infra/local/setup-local.sh
-# → builds the arm64 stack in a Lima VM, forwards :8080 to the Mac at :8088
-echo 'NEHEMIAH_URL=http://localhost:8088' > apps/web/.env
-npm run dev -w web                                 # → http://localhost:5173
-```
-
-`SKIP_DESKTOP=1` skips the ~8-min desktop image (the python shell still works).
-`limactl stop boring` frees the VM's RAM.
 
 | Path                    | Status                          | Why                                                              | Extra work vs a Linux box                             |
 | ----------------------- | ------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------- |

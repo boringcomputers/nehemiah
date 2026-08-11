@@ -313,11 +313,28 @@ databaseDescribe('device authorization retained-row boundary', () => {
 			expect(expiredResults[1]).toEqual({ status: 'fulfilled', value: false });
 			expect(expiredResults[2]).toEqual({ status: 'fulfilled', value: undefined });
 
-			const report = await reapExpiredDeviceAuthorizations(database);
-			expect(report).toMatchObject({ skipped: false });
-			expect(report.refreshTokens).toBeGreaterThanOrEqual(2);
-			expect(report.families).toBeGreaterThanOrEqual(1);
-			expect(report.authorizations).toBeGreaterThanOrEqual(2);
+			// The reaper drains oldest-first in bounded batches, and other suites'
+			// expired fixtures legitimately share this database and can sort ahead
+			// of this chain, so run the job to completion the way its schedule
+			// would instead of assuming one batch covers this family.
+			const totals = { accessTokens: 0, refreshTokens: 0, families: 0, authorizations: 0 };
+			for (let pass = 0; pass < 20; pass += 1) {
+				const report = await reapExpiredDeviceAuthorizations(database);
+				expect(report).toMatchObject({ skipped: false });
+				totals.accessTokens += report.accessTokens;
+				totals.refreshTokens += report.refreshTokens;
+				totals.families += report.families;
+				totals.authorizations += report.authorizations;
+				if (
+					report.accessTokens + report.refreshTokens + report.families + report.authorizations ===
+					0
+				) {
+					break;
+				}
+			}
+			expect(totals.refreshTokens).toBeGreaterThanOrEqual(2);
+			expect(totals.families).toBeGreaterThanOrEqual(1);
+			expect(totals.authorizations).toBeGreaterThanOrEqual(2);
 			const terminalRows = await database.query<{ count: number }>(
 				`SELECT
 				   (SELECT count(*) FROM device_authorizations

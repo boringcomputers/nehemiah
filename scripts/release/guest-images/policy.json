@@ -1,0 +1,174 @@
+{
+  "contractVersion": 1,
+  "rootfsProfile": "signed-developer-ext4-v1",
+  "alpineRepositorySnapshot": {
+    "release": "v3.23",
+    "capturedAt": "2026-08-11T14:55:44Z",
+    "maxIndexAgeHours": 168,
+    "architectures": {
+      "amd64": {
+        "apkArchitecture": "x86_64",
+        "main": {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/APKINDEX.tar.gz",
+          "sha256": "ec8c6d9632082c73d807c4d076698de10a54be95c77c7929cc560ae7c285b5d9",
+          "publishedAt": "2026-08-11T09:03:28Z"
+        },
+        "community": {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.23/community/x86_64/APKINDEX.tar.gz",
+          "sha256": "7e0789786820c9c522a53d3f40a72ebfa6d39d9b9c9fbaf6afffd9233302e949",
+          "publishedAt": "2026-08-10T12:33:12Z"
+        }
+      },
+      "arm64": {
+        "apkArchitecture": "aarch64",
+        "main": {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.23/main/aarch64/APKINDEX.tar.gz",
+          "sha256": "fd95fd6dd119eb786dc43592dbcbbf7cf979d8f0d6b3d85f180cc46fcfa9ccbc",
+          "publishedAt": "2026-08-11T09:01:08Z"
+        },
+        "community": {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.23/community/aarch64/APKINDEX.tar.gz",
+          "sha256": "5d748ab69d207c6ce056d5f90036b38dd5195b3c047df0df08b7ed01c7362d21",
+          "publishedAt": "2026-08-10T12:19:54Z"
+        }
+      }
+    }
+  },
+  "npmRuntime": {
+    "version": "11.19.0",
+    "tarball": {
+      "url": "https://registry.npmjs.org/npm/-/npm-11.19.0.tgz",
+      "sha256": "31e9770f7dc71119a58509353b27917557aaf0ac9b5ef1a0465ee7d8ec67ae75"
+    },
+    "overlays": [
+      {
+        "name": "brace-expansion",
+        "version": "5.0.9",
+        "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz",
+        "sha256": "5d06001fddd25cbee90c96db4dc5b7b57711b984c3141e28d10f143deb52dbaf"
+      },
+      {
+        "name": "ip-address",
+        "version": "10.3.1",
+        "url": "https://registry.npmjs.org/ip-address/-/ip-address-10.3.1.tgz",
+        "sha256": "ad1790063beea11a312c801df30d58e147de762f4f77787552376eb7424623e5"
+      }
+    ]
+  },
+  "pythonRuntime": {
+    "pip": {
+      "version": "26.2.1",
+      "url": "https://files.pythonhosted.org/packages/f3/6e/1736e5b4ae2b778ef2f81c47d797de9f891d4d8acb047a24ca37a60294dd/pip-26.2.1-py3-none-any.whl",
+      "sha256": "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e"
+    },
+    "setuptools": {
+      "version": "84.0.0",
+      "url": "https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl",
+      "sha256": "51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670"
+    },
+    "pipVendorOverlays": [
+      {
+        "name": "msgpack",
+        "version": "1.2.1",
+        "format": "sdist",
+        "url": "https://files.pythonhosted.org/packages/31/f9/c0a1c127f9049db9155afc316952ea571720dd01833ff5e4d7e8e6352dbb/msgpack-1.2.1.tar.gz",
+        "sha256": "04c721c2c7448767e9e3f2520a475663d8ee0f09c31890f6d2bd70fd636a9647"
+      },
+      {
+        "name": "setuptools",
+        "version": "80.9.0",
+        "format": "wheel",
+        "url": "https://files.pythonhosted.org/packages/a3/dc/17031897dae0efacfea57dfd3a82fdd2a2aeb58e0ff71b77b87e44edc772/setuptools-80.9.0-py3-none-any.whl",
+        "sha256": "062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922"
+      }
+    ]
+  },
+  "commonPackages": [
+    "bash",
+    "ca-certificates",
+    "coreutils",
+    "curl",
+    "e2fsprogs",
+    "file",
+    "findutils",
+    "git",
+    "gzip",
+    "iproute2",
+    "jq",
+    "procps",
+    "python3",
+    "tar",
+    "util-linux"
+  ],
+  "desktopPackages": [
+    "chromium",
+    "dbus",
+    "dbus-x11",
+    "figlet",
+    "font-liberation",
+    "openbox",
+    "socat",
+    "x11vnc",
+    "xsetroot",
+    "font-misc-misc",
+    "xterm",
+    "xvfb"
+  ],
+  "architectures": {
+    "amd64": {
+      "ociBase": {
+        "name": "node",
+        "version": "24.19.0-alpine3.23",
+        "reference": "docker.io/library/node@sha256:5098ee834c9345ddd7fc2828a01dc90aa6de0e9ed6804a09a959b19a1fded97a",
+        "nodeVersion": "24.19.0",
+        "bundledNpmVersion": "11.17.0"
+      },
+      "filesystemUUIDs": {
+        "python": "fd54e328-8f62-4d86-8a01-ec1943140001",
+        "desktop": "fd54e328-8f62-4d86-8a01-ec1943140002"
+      }
+    },
+    "arm64": {
+      "ociBase": {
+        "name": "node",
+        "version": "24.19.0-alpine3.23",
+        "reference": "docker.io/library/node@sha256:0bec8aadbd59918cfe259ed8b261dc650da84f21f343f61c4938eaf085e8c0d2",
+        "nodeVersion": "24.19.0",
+        "bundledNpmVersion": "11.17.0"
+      },
+      "filesystemUUIDs": {
+        "python": "fd54e328-8f62-4d86-8a02-ec1943140001",
+        "desktop": "fd54e328-8f62-4d86-8a02-ec1943140002"
+      }
+    }
+  },
+  "flavors": {
+    "python": {
+      "imageBytes": 2147483648,
+      "maxCompressedBytes": 805306368
+    },
+    "desktop": {
+      "imageBytes": 6442450944,
+      "maxCompressedBytes": 2147483648
+    }
+  },
+  "vulnerabilityScan": {
+    "tool": "trivy",
+    "version": "0.72.0",
+    "maxDatabaseAgeHours": 24,
+    "maxEvidenceBytes": 104857600,
+    "severities": ["HIGH", "CRITICAL"],
+    "artifacts": {
+      "amd64": {
+        "url": "https://github.com/aquasecurity/trivy/releases/download/v0.72.0/trivy_0.72.0_Linux-64bit.tar.gz",
+        "sha256": "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"
+      },
+      "arm64": {
+        "url": "https://github.com/aquasecurity/trivy/releases/download/v0.72.0/trivy_0.72.0_Linux-ARM64.tar.gz",
+        "sha256": "2ca2c023109c2db6b2b77366b6717291452d4531167377d95c79547f0c8e3467"
+      }
+    },
+    "allowlist": "vulnerability-allowlist.json",
+    "allowlistSha256": "af779c1dea4c6b472330c33e22f55b6e880c3973478e0a3639ed3e4a9fa62ac4"
+  }
+}
