@@ -635,9 +635,11 @@ export function createManifest({
           evidence.contractVersion === 1 &&
           evidence.architecture === arch &&
           evidence.releaseVersion === version &&
-          evidence.operatingSystem?.id === "ubuntu" &&
-          evidence.operatingSystem?.version === "24.04" &&
-          evidence.operatingSystem?.codename === "noble" &&
+          JSON.stringify(Object.keys(evidence.operatingSystem ?? {}).sort()) ===
+            JSON.stringify(["codename", "id", "version"]) &&
+          evidence.operatingSystem.id === "ubuntu" &&
+          evidence.operatingSystem.version === "24.04" &&
+          evidence.operatingSystem.codename === "noble" &&
           evidence.snapshot?.baseUrl ===
             MANAGED_HOST_PACKAGE_POLICY.snapshot.baseUrl &&
           evidence.snapshot?.capturedAt ===
@@ -658,7 +660,14 @@ export function createManifest({
           maxBytes: MANAGED_HOST_PACKAGE_POLICY.limits.maxArchiveBytes,
           manifestSha256: evidence.manifestSha256,
           packageCount: evidence.packageCount,
-          operatingSystem: structuredClone(evidence.operatingSystem),
+          // The packager emits canonically sorted JSON, so rebuild the object
+          // in the reviewed policy key order that the contract validator and
+          // its JSON.stringify deep-equality checks expect.
+          operatingSystem: {
+            id: evidence.operatingSystem.id,
+            version: evidence.operatingSystem.version,
+            codename: evidence.operatingSystem.codename,
+          },
           snapshot: {
             baseUrl: evidence.snapshot.baseUrl,
             capturedAt: evidence.snapshot.capturedAt,

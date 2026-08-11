@@ -31,10 +31,23 @@ const TEST_GUEST_DIGESTS = {
   amd64: { python: "1".repeat(64), desktop: "2".repeat(64) },
   arm64: { python: "3".repeat(64), desktop: "4".repeat(64) },
 };
+function canonicallySorted(value) {
+  if (Array.isArray(value)) return value.map(canonicallySorted);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicallySorted(value[key])]),
+    );
+  return value;
+}
+
+// The packager writes manifest.json with canonically sorted keys, so parsed
+// evidence arrives key-sorted at every level; the fixture must match.
 const TEST_PACKAGE_MANIFESTS = Object.fromEntries(
   ["amd64", "arm64"].map((arch, index) => [
     arch,
-    {
+    canonicallySorted({
       contractVersion: 1,
       architecture: arch,
       releaseVersion: VERSION,
@@ -49,7 +62,7 @@ const TEST_PACKAGE_MANIFESTS = Object.fromEntries(
         baseUrl: "https://snapshot.ubuntu.com/ubuntu/20260809T000000Z",
         capturedAt: "2026-08-09T00:00:00Z",
       },
-    },
+    }),
   ]),
 );
 
