@@ -13,6 +13,10 @@
 #   - hostname:   fallback recovery when no server_id is known — read from
 #                 LATITUDE_HOSTNAME or ~/.config/latitude/last-created-hostname,
 #                 then resolved to a unique server via the Latitude API.
+#                 When the server_id came from the state file and a hostname
+#                 record exists, both must agree (verified via the provider)
+#                 before anything is deleted; conflicting records abort.
+#                 An explicit LATITUDE_SERVER_ID bypasses the check.
 #
 # The API key is NEVER printed.
 #
@@ -51,8 +55,10 @@ if [[ -z "${API_KEY}" && -f "${CONF_DIR}/api_key" ]]; then
 fi
 
 SERVER_ID="${LATITUDE_SERVER_ID:-${SERVER_ID:-}}"
+SERVER_ID_SOURCE="env"
 if [[ -z "${SERVER_ID}" && -f "${CONF_DIR}/server_id" ]]; then
   SERVER_ID="$(tr -d '[:space:]' < "${CONF_DIR}/server_id")"
+  SERVER_ID_SOURCE="file"
 fi
 
 if [[ -z "${API_KEY}" ]]; then
@@ -60,28 +66,36 @@ if [[ -z "${API_KEY}" ]]; then
   exit 1
 fi
 
-# Recovery path: when no id is known (e.g. provisioning saw a malformed create
-# response, or a status poll failed before the id was saved), look the server up
-# by the durable hostname correlation value that provision.sh records. We never
-# parse an id from a possibly-malformed body — we query the provider and require a
-# single validated match.
+# The durable hostname correlation value that provision.sh records (or an
+# explicit LATITUDE_HOSTNAME). Used to recover a host when no id is known, and
+# to verify a file-sourced id before the destructive delete.
 HOSTNAME_LOOKUP="${LATITUDE_HOSTNAME:-}"
 if [[ -z "${HOSTNAME_LOOKUP}" && -f "${CONF_DIR}/last-created-hostname" ]]; then
   HOSTNAME_LOOKUP="$(tr -d '[:space:]' < "${CONF_DIR}/last-created-hostname")"
 fi
-if [[ -z "${SERVER_ID}" && -n "${HOSTNAME_LOOKUP}" ]]; then
-  echo "==> no server_id on file; looking up the server by hostname '${HOSTNAME_LOOKUP}'" >&2
-  LOOKUP_RESP="$(mktemp "${TMPDIR:-/tmp}/latitude_lookup.XXXXXX")"
-  LOOKUP_CODE="$(
-    curl -sS -o "${LOOKUP_RESP}" -w '%{http_code}' \
+
+# Resolve HOSTNAME_LOOKUP to a validated server id via the provider. We never
+# parse an id from a possibly-malformed local body — we query the provider and
+# require a single validated match. Prints the id on success. Returns 0 on a
+# unique match, 2 when no server matches, 4 when several match, 3 when the
+# lookup itself failed.
+lookup_server_by_hostname() {
+  local response code resolved status=0
+  response="$(mktemp "${TMPDIR:-/tmp}/latitude_lookup.XXXXXX")"
+  code="$(
+    curl -sS -o "${response}" -w '%{http_code}' \
       -G "https://api.latitude.sh/servers" \
       --data-urlencode "filter[hostname]=${HOSTNAME_LOOKUP}" \
       --data-urlencode "page[size]=200" \
       -H "Authorization: Bearer ${API_KEY}" \
       -H "Accept: application/vnd.api+json"
-  )"
-  if [[ "${LOOKUP_CODE}" == "200" ]]; then
-    if SERVER_ID="$(python3 - "${LOOKUP_RESP}" "${HOSTNAME_LOOKUP}" <<'PY'
+  )" || { rm -f "${response}"; return 3; }
+  if [[ "${code}" != "200" ]]; then
+    rm -f "${response}"
+    echo "error: hostname lookup failed (HTTP ${code})." >&2
+    return 3
+  fi
+  resolved="$(python3 - "${response}" "${HOSTNAME_LOOKUP}" <<'PY'
 import json, pathlib, re, sys
 resp = json.loads(pathlib.Path(sys.argv[1]).read_text())
 wanted = sys.argv[2]
@@ -98,22 +112,68 @@ for item in resp.get("data", []) or []:
 ids = sorted(set(ids))
 if len(ids) == 1:
     print(ids[0])
-elif not ids:
-    raise SystemExit("no server matches the hostname")
-else:
-    raise SystemExit("multiple servers match the hostname; set LATITUDE_SERVER_ID explicitly")
+    raise SystemExit(0)
+raise SystemExit(2 if not ids else 4)
 PY
-)"; then
-      echo "==> resolved server ${SERVER_ID} by hostname" >&2
-    else
-      SERVER_ID=""
-      echo "error: hostname lookup could not resolve a unique server id for '${HOSTNAME_LOOKUP}'." >&2
-      echo "       Inspect the Latitude dashboard and set LATITUDE_SERVER_ID explicitly." >&2
-    fi
+)" || status=$?
+  rm -f "${response}"
+  [[ "${status}" -eq 0 ]] && printf '%s\n' "${resolved}"
+  return "${status}"
+}
+
+# Recovery path: when no id is known (e.g. provisioning saw a malformed create
+# response, or a status poll failed before the id was saved), recover the host
+# by the recorded hostname.
+if [[ -z "${SERVER_ID}" && -n "${HOSTNAME_LOOKUP}" ]]; then
+  echo "==> no server_id on file; looking up the server by hostname '${HOSTNAME_LOOKUP}'" >&2
+  LOOKUP_STATUS=0
+  SERVER_ID="$(lookup_server_by_hostname)" || LOOKUP_STATUS=$?
+  if [[ "${LOOKUP_STATUS}" -eq 0 ]]; then
+    echo "==> resolved server ${SERVER_ID} by hostname" >&2
   else
-    echo "error: hostname lookup failed (HTTP ${LOOKUP_CODE})." >&2
+    SERVER_ID=""
+    if [[ "${LOOKUP_STATUS}" -ne 3 ]]; then
+      echo "error: hostname lookup could not resolve a unique server id for '${HOSTNAME_LOOKUP}'." >&2
+    fi
+    echo "       Inspect the Latitude dashboard and set LATITUDE_SERVER_ID explicitly." >&2
   fi
-  rm -f "${LOOKUP_RESP}"
+fi
+
+# Conflicting-records guard: a stale server_id file alongside a newer
+# last-created-hostname (an interrupted provisioning run) must not silently
+# delete the PREVIOUS server while the newly billed host keeps running. When
+# the id came from the state file and a hostname record exists, require the
+# provider to agree before deleting; reject a conflict instead of preferring
+# the id. An explicit LATITUDE_SERVER_ID bypasses this check.
+if [[ -n "${SERVER_ID}" && "${SERVER_ID_SOURCE}" == "file" && -n "${HOSTNAME_LOOKUP}" ]]; then
+  echo "==> verifying the on-file server_id against hostname '${HOSTNAME_LOOKUP}'" >&2
+  VERIFY_STATUS=0
+  RESOLVED_ID="$(lookup_server_by_hostname)" || VERIFY_STATUS=$?
+  case "${VERIFY_STATUS}" in
+    0)
+      if [[ "${RESOLVED_ID}" != "${SERVER_ID}" ]]; then
+        echo "error: conflicting recovery records — ${CONF_DIR}/server_id says '${SERVER_ID}' but hostname '${HOSTNAME_LOOKUP}' resolves to '${RESOLVED_ID}' (likely an interrupted provisioning run)." >&2
+        echo "       Inspect the Latitude dashboard, tear down each host explicitly with LATITUDE_SERVER_ID=<id>, and remove the stale ${CONF_DIR}/server_id file." >&2
+        exit 1
+      fi
+      echo "==> verified: the hostname resolves to the same server" >&2
+      ;;
+    2)
+      # No live server carries the hostname, so the recorded host is already
+      # gone; deleting by the on-file id is a safe no-op (404) at worst.
+      echo "==> hostname matches no live server; proceeding with the on-file server_id" >&2
+      ;;
+    4)
+      echo "error: multiple servers match hostname '${HOSTNAME_LOOKUP}'; cannot verify the on-file server_id." >&2
+      echo "       Tear down explicitly with LATITUDE_SERVER_ID=<id>." >&2
+      exit 1
+      ;;
+    *)
+      echo "error: could not verify the on-file server_id (hostname lookup failed); refusing a blind destructive delete." >&2
+      echo "       Retry, or tear down explicitly with LATITUDE_SERVER_ID=<id>." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 if [[ -z "${SERVER_ID}" ]]; then
