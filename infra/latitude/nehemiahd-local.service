@@ -1,0 +1,31 @@
+[Unit]
+Description=nehemiahd — local/prototype Firecracker microVM daemon
+Documentation=https://github.com/boringcomputers/nehemiah
+After=network.target
+Wants=network.target
+Conflicts=boringd.service
+
+[Service]
+Type=simple
+# Prototype installs may start without credentials and retain legacy config
+# compatibility. Never install this unit on an approved managed host.
+EnvironmentFile=-/etc/boring/boringd.env
+EnvironmentFile=-/etc/boring/nehemiahd.env
+ExecStart=/usr/local/bin/nehemiahd
+WorkingDirectory=/opt/boring
+Restart=always
+RestartSec=2
+KillMode=control-group
+User=root
+Group=root
+UMask=0077
+LimitNOFILE=1048576
+LimitNPROC=65536
+Delegate=yes
+RuntimeDirectory=nehemiahd
+RuntimeDirectoryMode=0700
+StateDirectory=nehemiahd
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

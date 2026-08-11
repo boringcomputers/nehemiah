@@ -1,0 +1,15 @@
+[Unit]
+Description=Nehemiah local/prototype guest networking
+After=network-online.target dnsmasq.service
+Wants=network-online.target
+Before=nehemiahd.service
+
+[Service]
+Type=oneshot
+# Local development keeps the historical optional environment and mode.
+EnvironmentFile=-/etc/boring/nehemiahd.env
+ExecStart=/opt/boring/bin/net-setup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

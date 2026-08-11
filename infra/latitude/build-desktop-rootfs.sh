@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# build-desktop-rootfs.sh - Build the "desktop" ext4 rootfs for Nehemiah.
+# build-desktop-rootfs.sh - LOCAL DEVELOPMENT ONLY: build a mutable desktop.
+# Managed hosts install the signed, scanned desktop ext4 release artifact and
+# never run this script or resolve these mutable apt/npm/curl inputs.
 #
 # A minimal Debian rootfs that boots straight into a headless X session
 # (Xvfb + openbox + xterm + xclock) served over VNC, and bridges the VNC port
@@ -16,6 +18,7 @@ NEHEMIAH_ROOT="/opt/boring"
 ROOTFS_DIR="${NEHEMIAH_ROOT}/rootfs"
 IMG="${ROOTFS_DIR}/desktop.ext4"
 IMG_SIZE_MB="${IMG_SIZE_MB:-6144}"   # room for chromium + node + coding agents
+GUEST_AGENT_BIN="${GUEST_AGENT_BIN:-${NEHEMIAH_ROOT}/bin/bc-guest-agent}"
 SUITE="${SUITE:-bookworm}"
 MIRROR="${MIRROR:-http://deb.debian.org/debian}"
 # xcalc/xclock come from x11-apps; figlet for banners. (galculator was dropped —
@@ -26,6 +29,9 @@ PKGS="xvfb,x11vnc,openbox,xterm,x11-xserver-utils,xfonts-base,x11-apps,fonts-lib
 log()  { printf '\033[1;34m[desktop]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[desktop:error]\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "must run as root"
+[[ "${NEHEMIAH_MANAGED_ROOTFS:-0}" == 0 && "${NEHEMIAH_MODE:-0}" != 1 ]] \
+  || die "managed desktop builds are forbidden; install the signed release image"
+[ -x "${GUEST_AGENT_BIN}" ] || die "guest agent not found at ${GUEST_AGENT_BIN} (build guest-agent first)"
 
 WORK="$(mktemp -d /tmp/boring-desktop.XXXXXX)"
 MNT="${WORK}/mnt"
@@ -51,6 +57,7 @@ mount -o loop "${IMG}" "${MNT}"
 log "debootstrap ${SUITE} (minbase + desktop packages)..."
 debootstrap --variant=minbase --include="${PKGS}" "${SUITE}" "${MNT}" "${MIRROR}" \
   || die "debootstrap failed"
+install -D -m0755 "${GUEST_AGENT_BIN}" "${MNT}/usr/local/sbin/bc-guest-agent"
 
 log "Configuring guest (chromium + node 22 + coding agents)..."
 cp -f /etc/resolv.conf "${MNT}/etc/resolv.conf"   # DNS for apt/npm inside chroot
@@ -106,8 +113,17 @@ mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 hostname boring 2>/dev/null
 # Firecracker guests boot with loopback DOWN; x11vnc + socat talk over 127.0.0.1.
 ip link set lo up 2>/dev/null || true
-# eth0 is configured by the kernel (ip=dhcp); publish its DNS so the browser works.
-cat /proc/net/pnp > /etc/resolv.conf 2>/dev/null || echo "nameserver 1.1.1.1" > /etc/resolv.conf
+# eth0 is configured by the kernel (ip=dhcp). Keep DNS on the managed bridge so
+# every answer passes through nehemiahd's policy binding; never fall back to a
+# direct public resolver. /proc/net/pnp is primary, with the DHCP default gateway
+# (or the deployment default) used only when the kernel did not publish it.
+if [ -s /proc/net/pnp ]; then
+  cat /proc/net/pnp > /etc/resolv.conf
+else
+  DNS_GATEWAY=$(ip -4 route show default | awk '$1 == "default" { print $3; exit }')
+  [ -n "$DNS_GATEWAY" ] || DNS_GATEWAY=10.200.0.1
+  printf 'nameserver %s\n' "$DNS_GATEWAY" > /etc/resolv.conf
+fi
 export HOME=/root DISPLAY=:0
 
 Xvfb :0 -screen 0 1280x800x24 -ac -nolisten tcp >/var/log/xvfb.log 2>&1 &
@@ -137,7 +153,21 @@ x11vnc -display :0 -forever -shared -nopw -rfbport 5900 -noxdamage -threads -def
 # Bridge guest vsock port 5900 -> local VNC. The host connects via the vsock UDS.
 socat VSOCK-LISTEN:5900,fork,reuseaddr TCP:127.0.0.1:5900 >/var/log/socat.log 2>&1 &
 
-echo NEHEMIAH_READY > /dev/ttyS0
+# Keep the control agent alive independently of the desktop processes. Only
+# report serial readiness once the agent has actually bound its vsock port.
+(
+  while true; do
+    rm -f /run/bc-guest-agent.ready
+    /usr/local/sbin/bc-guest-agent >>/var/log/bc-guest-agent.log 2>&1
+    sleep 1
+  done
+) &
+i=0; while [ ! -e /run/bc-guest-agent.ready ] && [ "$i" -lt 100 ]; do i=$((i+1)); sleep 0.05; done
+if [ -e /run/bc-guest-agent.ready ]; then
+  echo NEHEMIAH_READY > /dev/ttyS0
+else
+  echo "guest agent failed to become ready" > /dev/ttyS0
+fi
 exec /bin/sh
 INIT_EOF
 chmod +x "${MNT}/sbin/boring-init"
