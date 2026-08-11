@@ -22,6 +22,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
@@ -181,19 +183,37 @@ def download(url: str, output: pathlib.Path, max_bytes: int) -> None:
         fail("unsafe snapshot download URL")
     opener = urllib.request.build_opener(StrictHTTPSRedirect())
     request = urllib.request.Request(url, headers={"User-Agent": "nehemiah-release-builder/1"})
-    try:
-        with opener.open(request, timeout=60) as response, output.open("xb") as stream:
-            total = 0
-            while True:
-                block = response.read(1024 * 1024)
-                if not block:
-                    break
-                total += len(block)
-                if total > max_bytes:
-                    fail("snapshot download exceeds its size policy")
-                stream.write(block)
-    except (OSError, urllib.error.URLError) as error:
-        fail(f"snapshot download failed: {error}")
+    # snapshot.ubuntu.com intermittently answers 5xx; retry transient server
+    # and network failures with backoff, mirroring the curl fetchers'
+    # --retry 3. Policy failures raise SystemExit and are never retried, and
+    # every download is digest-verified afterward, so retries cannot alter
+    # the closure.
+    last_error: Exception | None = None
+    for attempt in range(4):
+        if attempt:
+            time.sleep(2**attempt)
+        try:
+            with opener.open(request, timeout=60) as response, output.open("xb") as stream:
+                total = 0
+                while True:
+                    block = response.read(1024 * 1024)
+                    if not block:
+                        break
+                    total += len(block)
+                    if total > max_bytes:
+                        fail("snapshot download exceeds its size policy")
+                    stream.write(block)
+            break
+        except urllib.error.HTTPError as error:
+            output.unlink(missing_ok=True)
+            if error.code < 500:
+                fail(f"snapshot download failed: {error}")
+            last_error = error
+        except (OSError, urllib.error.URLError) as error:
+            output.unlink(missing_ok=True)
+            last_error = error
+    else:
+        fail(f"snapshot download failed: {last_error}")
     if output.stat().st_size == 0:
         fail("snapshot returned an empty object")
 
