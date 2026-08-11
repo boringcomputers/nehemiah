@@ -10,6 +10,9 @@
 #                 or from the file ~/.config/latitude/api_key
 #   - server_id:  read from LATITUDE_SERVER_ID / SERVER_ID (env or server.env),
 #                 or from the file ~/.config/latitude/server_id
+#   - hostname:   fallback recovery when no server_id is known — read from
+#                 LATITUDE_HOSTNAME or ~/.config/latitude/last-created-hostname,
+#                 then resolved to a unique server via the Latitude API.
 #
 # The API key is NEVER printed.
 #
@@ -56,8 +59,65 @@ if [[ -z "${API_KEY}" ]]; then
   echo "error: no API key found. Set LATITUDE_API_KEY in ${ENV_FILE} or create ${CONF_DIR}/api_key." >&2
   exit 1
 fi
+
+# Recovery path: when no id is known (e.g. provisioning saw a malformed create
+# response, or a status poll failed before the id was saved), look the server up
+# by the durable hostname correlation value that provision.sh records. We never
+# parse an id from a possibly-malformed body — we query the provider and require a
+# single validated match.
+HOSTNAME_LOOKUP="${LATITUDE_HOSTNAME:-}"
+if [[ -z "${HOSTNAME_LOOKUP}" && -f "${CONF_DIR}/last-created-hostname" ]]; then
+  HOSTNAME_LOOKUP="$(tr -d '[:space:]' < "${CONF_DIR}/last-created-hostname")"
+fi
+if [[ -z "${SERVER_ID}" && -n "${HOSTNAME_LOOKUP}" ]]; then
+  echo "==> no server_id on file; looking up the server by hostname '${HOSTNAME_LOOKUP}'" >&2
+  LOOKUP_RESP="$(mktemp "${TMPDIR:-/tmp}/latitude_lookup.XXXXXX")"
+  LOOKUP_CODE="$(
+    curl -sS -o "${LOOKUP_RESP}" -w '%{http_code}' \
+      -G "https://api.latitude.sh/servers" \
+      --data-urlencode "filter[hostname]=${HOSTNAME_LOOKUP}" \
+      --data-urlencode "page[size]=200" \
+      -H "Authorization: Bearer ${API_KEY}" \
+      -H "Accept: application/vnd.api+json"
+  )"
+  if [[ "${LOOKUP_CODE}" == "200" ]]; then
+    if SERVER_ID="$(python3 - "${LOOKUP_RESP}" "${HOSTNAME_LOOKUP}" <<'PY'
+import json, pathlib, re, sys
+resp = json.loads(pathlib.Path(sys.argv[1]).read_text())
+wanted = sys.argv[2]
+ids = []
+for item in resp.get("data", []) or []:
+    if not isinstance(item, dict):
+        continue
+    attrs = item.get("attributes") or {}
+    if attrs.get("hostname") != wanted:
+        continue
+    sid = item.get("id")
+    if isinstance(sid, str) and re.fullmatch(r"sv_[A-Za-z0-9_-]{4,128}", sid):
+        ids.append(sid)
+ids = sorted(set(ids))
+if len(ids) == 1:
+    print(ids[0])
+elif not ids:
+    raise SystemExit("no server matches the hostname")
+else:
+    raise SystemExit("multiple servers match the hostname; set LATITUDE_SERVER_ID explicitly")
+PY
+)"; then
+      echo "==> resolved server ${SERVER_ID} by hostname" >&2
+    else
+      SERVER_ID=""
+      echo "error: hostname lookup could not resolve a unique server id for '${HOSTNAME_LOOKUP}'." >&2
+      echo "       Inspect the Latitude dashboard and set LATITUDE_SERVER_ID explicitly." >&2
+    fi
+  else
+    echo "error: hostname lookup failed (HTTP ${LOOKUP_CODE})." >&2
+  fi
+  rm -f "${LOOKUP_RESP}"
+fi
+
 if [[ -z "${SERVER_ID}" ]]; then
-  echo "error: no server_id found. Set LATITUDE_SERVER_ID/SERVER_ID in ${ENV_FILE} or create ${CONF_DIR}/server_id." >&2
+  echo "error: no server_id found. Set LATITUDE_SERVER_ID/SERVER_ID in ${ENV_FILE}, create ${CONF_DIR}/server_id, or set LATITUDE_HOSTNAME to recover the host by provider lookup." >&2
   exit 1
 fi
 

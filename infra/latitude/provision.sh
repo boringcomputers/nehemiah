@@ -390,18 +390,22 @@ PY
 chmod 0600 "$WORK_DIR/create-server.json"
 latitude_request POST /servers "$WORK_DIR/create-server.json" \
   "$WORK_DIR/create-server-response.json" 201
-# Persist the raw creation response to durable state before parsing. Latitude has
-# accepted the (billable) create, so an accepted-but-unparseable response must
-# still leave a 0600 record to identify and tear down the host — WORK_DIR is
-# removed on exit.
+# Latitude has accepted the (billable) create. Persist durable recovery inputs
+# BEFORE parsing so an accepted-but-unparseable response can still be identified
+# and torn down — WORK_DIR is removed on exit. The requested hostname is the
+# durable correlation value teardown.sh uses to find the server via a provider
+# lookup when the id cannot be validated from the response body.
 mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
+printf '%s\n' "$HOSTNAME_VALUE" > "$WORK_DIR/last-created-hostname"
+chmod 0600 "$WORK_DIR/last-created-hostname"
+mv -- "$WORK_DIR/last-created-hostname" "$STATE_DIR/last-created-hostname"
 raw_creation_tmp="$(mktemp "$STATE_DIR/.created-server.XXXXXX")"
 cp -- "$WORK_DIR/create-server-response.json" "$raw_creation_tmp"
 chmod 0600 "$raw_creation_tmp"
 mv -- "$raw_creation_tmp" "$STATE_DIR/last-created-server.json"
-log "persisted the raw creation response to $STATE_DIR/last-created-server.json for recovery"
-SERVER_ID="$(python3 - "$WORK_DIR/create-server-response.json" <<'PY'
+log "persisted recovery inputs (hostname + raw response) under $STATE_DIR for teardown"
+if ! SERVER_ID="$(python3 - "$WORK_DIR/create-server-response.json" <<'PY'
 import json
 import pathlib
 import re
@@ -412,7 +416,23 @@ if not isinstance(identifier, str) or not re.fullmatch(r"sv_[A-Za-z0-9_-]{4,128}
     raise SystemExit("Latitude returned an invalid server id")
 print(identifier)
 PY
-)"
+)"; then
+  die "Latitude accepted the billable create but returned an unparseable server id.
+A host may be billing now. Do NOT read the id from the malformed body
+($STATE_DIR/last-created-server.json); recover it by its hostname:
+    LATITUDE_HOSTNAME='$HOSTNAME_VALUE' infra/latitude/teardown.sh"
+fi
+# Persist the validated id before polling so teardown can discover it even if the
+# status poll below fails after the host is already billing.
+if [[ ! -e "$STATE_DIR/server_id" && ! -L "$STATE_DIR/server_id" ]]; then
+  server_id_tmp="$(mktemp "$STATE_DIR/.server_id.XXXXXX")"
+  printf '%s\n' "$SERVER_ID" > "$server_id_tmp"
+  chmod 0600 "$server_id_tmp"
+  mv -- "$server_id_tmp" "$STATE_DIR/server_id"
+  log "saved the server id to $STATE_DIR/server_id"
+else
+  log "left existing $STATE_DIR/server_id unchanged; use LATITUDE_SERVER_ID=$SERVER_ID for teardown"
+fi
 log "created hourly-billed server $SERVER_ID; waiting for provider status=on"
 
 SERVER_IP=""
@@ -449,15 +469,8 @@ delete_user_data
 
 mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
-if [[ ! -e "$STATE_DIR/server_id" && ! -L "$STATE_DIR/server_id" ]]; then
-  state_tmp="$(mktemp "$STATE_DIR/.server_id.XXXXXX")"
-  printf '%s\n' "$SERVER_ID" > "$state_tmp"
-  chmod 0600 "$state_tmp"
-  mv "$state_tmp" "$STATE_DIR/server_id"
-  log "saved the server id to $STATE_DIR/server_id"
-else
-  log "left existing $STATE_DIR/server_id unchanged; use LATITUDE_SERVER_ID=$SERVER_ID for teardown"
-fi
+# The server id was persisted before polling (above); only provider evidence
+# remains to record now that the host is confirmed online.
 provider_evidence_path="$STATE_DIR/provider-image-${SERVER_ID}.json"
 if [[ ! -e "$provider_evidence_path" && ! -L "$provider_evidence_path" ]]; then
   provider_evidence_tmp="$(mktemp "$STATE_DIR/.provider-image.XXXXXX")"

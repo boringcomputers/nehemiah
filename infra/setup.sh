@@ -32,17 +32,13 @@ GO_VERSION="1.25.0"
 log() { printf '\033[1;34m[setup]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[setup:error]\033[0m %s\n' "$*" >&2; exit 1; }
 
-# --- local bootstrap is descoped --------------------------------------------
-# infra/latitude/bootstrap.sh now installs Firecracker/jailer/kernel only from
-# signed managed-release artifacts (it requires NEHEMIAH_RELEASE_VERSION, the
-# signed archive/kernel inputs, and the managed-host package cohort). This
-# self-serve script cannot supply that contract, so it stops here. Provision
-# managed hosts with infra/latitude/provision.sh + cloud-init. Set
-# NEHEMIAH_ALLOW_UNMANAGED_BOOTSTRAP=1 only if this box already carries the
-# signed release inputs and you accept the unmanaged path.
-if [[ "${NEHEMIAH_ALLOW_UNMANAGED_BOOTSTRAP:-}" != "1" ]]; then
-	die "local bootstrap is unsupported — bootstrap.sh installs only from signed managed-release artifacts. Use infra/latitude/provision.sh for managed hosts, or set NEHEMIAH_ALLOW_UNMANAGED_BOOTSTRAP=1 if this box already carries the signed release inputs (see infra/latitude/README.md)."
-fi
+# --- self-serve local bootstrap is descoped ---------------------------------
+# infra/latitude/bootstrap.sh installs Firecracker/jailer/kernel only from signed
+# managed-release artifacts (it requires NEHEMIAH_RELEASE_VERSION, the signed
+# archive/kernel inputs, and the managed-host package cohort). This self-serve
+# script cannot stage or forward that signed contract into the remote host, so it
+# is disabled rather than fail cryptically part-way through provisioning.
+die "self-serve local bootstrap is no longer supported: bootstrap.sh installs only from signed managed-release artifacts, which this script cannot supply. Provision managed hosts with infra/latitude/provision.sh + cloud-init (see infra/latitude/README.md)."
 
 # --- 0. preflight ------------------------------------------------------------
 log "Preflight on ${TARGET}…"
