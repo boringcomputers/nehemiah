@@ -286,8 +286,13 @@ requireText(
 );
 requireText(
   buildScript,
-  "installedPackage.dependencies === undefined",
-  "dependency-free release package assertion",
+  "must vendor exactly the bundled keyring dependency",
+  "vendored-only release package dependency assertion",
+);
+requireText(
+  buildScript,
+  "vendored keyring tarball digest mismatch",
+  "digest-pinned vendored keyring downloads",
 );
 requireText(
   buildScript,

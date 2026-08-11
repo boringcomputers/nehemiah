@@ -248,6 +248,124 @@ async function buildGoArtifact(definition, arch) {
   return artifactName;
 }
 
+// The credential store loads the napi-rs keyring at runtime; its native
+// .node bindings cannot be bundled by esbuild, and the packed CLI must
+// install offline, so the keyring and every platform binding are vendored
+// into the tarball as a bundled dependency, pinned by exact registry
+// tarball digest.
+const VENDORED_CLI_KEYRING = Object.freeze({
+  name: "@napi-rs/keyring",
+  version: "1.3.0",
+  tarballs: Object.freeze([
+    {
+      name: "@napi-rs/keyring",
+      sha256:
+        "3303402123327ecfc472e12b5577f4d7acf2e0780d1d646212ca51c8fbf50b84",
+    },
+    {
+      name: "@napi-rs/keyring-darwin-arm64",
+      sha256:
+        "b57f9a3136ab0e74d570370facf26fd0aafaceab41336853edffccb250b0a959",
+    },
+    {
+      name: "@napi-rs/keyring-darwin-x64",
+      sha256:
+        "962dc87ae7e6dfa5c496ee0c61ff0949a22d2c46b23805e0908a04ed4185ea53",
+    },
+    {
+      name: "@napi-rs/keyring-freebsd-x64",
+      sha256:
+        "693f11ec41e64baa36753ff33d2da68891d78e7b93f9226c2e2427ca7afcdcc2",
+    },
+    {
+      name: "@napi-rs/keyring-linux-arm-gnueabihf",
+      sha256:
+        "dcc7976c7a5285c1051170a14cd156bcac88ff92e8ebc80b84e54cf14fae4a41",
+    },
+    {
+      name: "@napi-rs/keyring-linux-arm64-gnu",
+      sha256:
+        "8765084a2d3b53d6bb1b731e050d812b94b4bab71aeafe6cff4e46e773e0e0e7",
+    },
+    {
+      name: "@napi-rs/keyring-linux-arm64-musl",
+      sha256:
+        "f29cac9864985cb268b307ba138966f53f249c6d16ec7adfeb6a64ceb75d5750",
+    },
+    {
+      name: "@napi-rs/keyring-linux-riscv64-gnu",
+      sha256:
+        "45bdbeb4f875c0e412ac68832350d1cd96c9b45b456e034f3ec52caeaac0f118",
+    },
+    {
+      name: "@napi-rs/keyring-linux-x64-gnu",
+      sha256:
+        "c739de9323a5ae7d27b93669661a78b9678e6d66d891435447e628f6432eb05b",
+    },
+    {
+      name: "@napi-rs/keyring-linux-x64-musl",
+      sha256:
+        "9a9743d13272b6a66370bf93d7f64decf076794804f7b9de9fce842e0ec0ae26",
+    },
+    {
+      name: "@napi-rs/keyring-win32-arm64-msvc",
+      sha256:
+        "7dfe816fb394c90b34d1284c7f64e2ee75c23b9e6cc68e97668fb102ce789d65",
+    },
+    {
+      name: "@napi-rs/keyring-win32-ia32-msvc",
+      sha256:
+        "8fbbb969e43ccf942d730fa91e480c8a02b68965681f22fcb4d26b89a3f77bc2",
+    },
+    {
+      name: "@napi-rs/keyring-win32-x64-msvc",
+      sha256:
+        "a775ca1dda8f344a4d92fd2efb46f8c0ae6214ff30f8a066262788f34e43b184",
+    },
+  ]),
+});
+
+async function vendorCliKeyring(packageDirectory) {
+  const vendorScratch = path.join(scratchDirectory, "cli-keyring-vendor");
+  await mkdir(vendorScratch, { recursive: true });
+  const keyringRoot = path.join(
+    packageDirectory,
+    "node_modules",
+    VENDORED_CLI_KEYRING.name,
+  );
+  for (const tarball of VENDORED_CLI_KEYRING.tarballs) {
+    const shortName = tarball.name.split("/")[1];
+    const filename = `${shortName}-${VENDORED_CLI_KEYRING.version}.tgz`;
+    const url = `https://registry.npmjs.org/${tarball.name}/-/${filename}`;
+    const response = await fetch(url);
+    invariant(
+      response.ok,
+      `vendored keyring download failed: ${url} (${response.status})`,
+    );
+    const bytes = Buffer.from(await response.arrayBuffer());
+    invariant(
+      createHash("sha256").update(bytes).digest("hex") === tarball.sha256,
+      `vendored keyring tarball digest mismatch: ${tarball.name}`,
+    );
+    const archivePath = path.join(vendorScratch, filename);
+    await writeFile(archivePath, bytes, { mode: 0o644 });
+    // Platform bindings nest under the keyring package so its dynamic
+    // per-platform require() resolves them without touching the registry.
+    const destination =
+      tarball.name === VENDORED_CLI_KEYRING.name
+        ? keyringRoot
+        : path.join(keyringRoot, "node_modules", tarball.name);
+    await mkdir(destination, { recursive: true });
+    await runCommand("tar", [
+      "-xzf",
+      archivePath,
+      "-C",
+      destination,
+      "--strip-components=1",
+    ]);
+  }
+}
+
 async function buildCliArtifact() {
   await runCommand("npm", ["run", "build", "--workspace", "nehemiah-sdk"], {
     cwd: repositoryRoot,
@@ -308,9 +426,15 @@ async function buildCliArtifact() {
     files: ["dist", "README.md", "LICENSE", "NOTICE"],
     engines: cliPackage.engines,
     dependencies: {
-      "@napi-rs/keyring": cliPackage.dependencies["@napi-rs/keyring"],
+      [VENDORED_CLI_KEYRING.name]: VENDORED_CLI_KEYRING.version,
     },
+    bundleDependencies: [VENDORED_CLI_KEYRING.name],
   };
+  invariant(
+    cliPackage.dependencies[VENDORED_CLI_KEYRING.name] ===
+      VENDORED_CLI_KEYRING.version,
+    "vendored keyring version does not match the CLI workspace pin",
+  );
   await writeFile(
     path.join(packageDirectory, "package.json"),
     `${JSON.stringify(distributablePackage, null, 2)}\n`,
@@ -319,6 +443,7 @@ async function buildCliArtifact() {
       mode: 0o644,
     },
   );
+  await vendorCliKeyring(packageDirectory);
   const packDirectory = path.join(scratchDirectory, "npm-pack");
   await mkdir(packDirectory);
   const { stdout } = await runCommand(
@@ -381,10 +506,28 @@ async function buildCliArtifact() {
       "utf8",
     ),
   );
+  // The offline install above already proves nothing is fetched from a
+  // registry; the only permitted runtime dependency is the vendored,
+  // bundled OS-keyring binding, which must have landed inside the package.
   invariant(
-    installedPackage.dependencies === undefined &&
-      installedPackage.optionalDependencies === undefined,
-    "release CLI package must not contain runtime npm dependencies",
+    JSON.stringify(installedPackage.dependencies) ===
+      JSON.stringify({
+        [VENDORED_CLI_KEYRING.name]: VENDORED_CLI_KEYRING.version,
+      }) &&
+      installedPackage.optionalDependencies === undefined &&
+      JSON.stringify(
+        installedPackage.bundleDependencies ??
+          installedPackage.bundledDependencies,
+      ) === JSON.stringify([VENDORED_CLI_KEYRING.name]),
+    "release CLI package must vendor exactly the bundled keyring dependency",
+  );
+  await assertRegularFile(
+    path.join(
+      installDirectory,
+      "lib/node_modules/nehemiah-cli/node_modules",
+      VENDORED_CLI_KEYRING.name,
+      "package.json",
+    ),
   );
   const { stdout: helpOutput } = await runCommand(
     path.join(installDirectory, "bin/bc"),
