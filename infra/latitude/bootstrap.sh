@@ -10,6 +10,12 @@
 # from local artifacts already verified against the signed release. Production
 # guest images must also have been installed by cloud-init.
 #
+# MANAGED HOSTS ONLY. This installs exclusively from signed managed-release
+# artifacts and requires the managed-release inputs below (NEHEMIAH_RELEASE_VERSION,
+# the signed archive/kernel, and the managed-host package cohort). It is driven by
+# infra/latitude/provision.sh + cloud-init; the self-serve infra/setup.sh and
+# infra/local/setup-local.sh flows do not satisfy this contract and refuse to run it.
+#
 set -euo pipefail
 
 # --------------------------------------------------------------------------

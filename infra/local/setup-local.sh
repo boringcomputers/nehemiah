@@ -24,6 +24,13 @@ log()  { printf '\033[1;34m[local]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[local:error]\033[0m %s\n' "$*" >&2; exit 1; }
 invm() { limactl shell "${VM}" -- sudo bash -c "$*"; }
 
+# --- local bootstrap is descoped --------------------------------------------
+# bootstrap.sh installs Firecracker/jailer/kernel only from signed managed-release
+# artifacts, which this Lima flow cannot supply. Provision managed hosts with
+# infra/latitude/provision.sh + cloud-init. Set NEHEMIAH_ALLOW_UNMANAGED_BOOTSTRAP=1
+# only if the guest already carries the signed release inputs.
+[ "${NEHEMIAH_ALLOW_UNMANAGED_BOOTSTRAP:-}" = "1" ] || die "local bootstrap is unsupported — bootstrap.sh installs only from signed managed-release artifacts (see infra/latitude/README.md). Set NEHEMIAH_ALLOW_UNMANAGED_BOOTSTRAP=1 to override only if the guest already carries the signed release inputs."
+
 # --- 0. host preflight -------------------------------------------------------
 [ "$(uname -s)" = "Darwin" ] || die "this script is for a Mac host; on Linux use infra/setup.sh directly"
 command -v limactl >/dev/null || die "Lima not installed — run: brew install lima"
