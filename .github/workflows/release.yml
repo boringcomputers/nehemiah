@@ -68,6 +68,9 @@ jobs:
         run: |
           npm run check --workspace nehemiah-sdk
           npm run test --workspace nehemiah-sdk
+          # The CLI imports the SDK's published surface (dist/), so build it
+          # before type-checking the CLI against it.
+          npm run build --workspace nehemiah-sdk
           npm run check --workspace nehemiah-cli
           npm run test --workspace nehemiah-cli
 
