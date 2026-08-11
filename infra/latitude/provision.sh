@@ -151,7 +151,7 @@ fi
 : "${LATITUDE_SSH_KEY:?set LATITUDE_SSH_KEY (ssh_...)}"
 PLAN="${LATITUDE_PLAN:-c3-small-x86}"
 SITE="${LATITUDE_SITE:-MIA2}"
-HOSTNAME_VALUE="${LATITUDE_HOSTNAME:-nehemiah-metal-01}"
+HOSTNAME_BASE="${LATITUDE_HOSTNAME:-nehemiah-metal-01}"
 LATITUDE_API_BASE="${LATITUDE_API_BASE:-https://api.latitude.sh}"
 POLL_ATTEMPTS="${LATITUDE_POLL_ATTEMPTS:-60}"
 POLL_INTERVAL_SECONDS="${LATITUDE_POLL_INTERVAL_SECONDS:-15}"
@@ -204,8 +204,19 @@ case "$LATITUDE_OS_ARCH:$OPERATING_SYSTEM" in
   amd64:ubuntu_24_04_x64_lts | arm64:ubuntu_24_04_arm64_lts) ;;
   *) die "provider image architecture and slug do not match" ;;
 esac
-[[ "$HOSTNAME_VALUE" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$ ]] \
-  || die "invalid LATITUDE_HOSTNAME"
+# The hostname is the durable recovery correlation value for this run's
+# billable create, so it must never be shared by two servers. Latitude
+# enforces neither hostname uniqueness nor create idempotency, so uniqueness
+# is generated locally: every run appends a random suffix, which makes
+# concurrent runs (even with the same LATITUDE_HOSTNAME) use distinct
+# correlation values. The provider caps hostnames at 32 characters, so the
+# base leaves room for the 9-character suffix.
+[[ "$HOSTNAME_BASE" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,21}[A-Za-z0-9])?$ ]] \
+  || die "invalid LATITUDE_HOSTNAME: up to 23 characters (letters, digits, dots, hyphens; alphanumeric at both ends) so the unique per-run suffix fits the provider's 32-character hostname limit"
+HOSTNAME_SUFFIX="$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+[[ "$HOSTNAME_SUFFIX" =~ ^[0-9a-f]{8}$ ]] \
+  || die "could not generate a random hostname suffix"
+HOSTNAME_VALUE="${HOSTNAME_BASE}-${HOSTNAME_SUFFIX}"
 [[ "$POLL_ATTEMPTS" =~ ^[1-9][0-9]{0,2}$ && "$POLL_ATTEMPTS" -le 240 ]] \
   || die "LATITUDE_POLL_ATTEMPTS must be between 1 and 240"
 [[ "$POLL_INTERVAL_SECONDS" =~ ^[0-9]{1,2}$ && "$POLL_INTERVAL_SECONDS" -le 60 ]] \
@@ -326,12 +337,13 @@ done
   || die "approved Latitude operating-system id was not found within the bounded inventory"
 log "validated approved Latitude operating-system id $LATITUDE_OS_ID for $PLAN"
 
-# The requested hostname is the durable recovery correlation value for this
-# create: teardown resolves it via the provider when no validated id exists,
-# and it requires a single match. Refuse to create a second server behind an
-# already-live hostname — a duplicate would make hostname recovery ambiguous
-# and could strand a billed host whose create response was unparseable.
-# HOSTNAME_VALUE is validated above to URL-safe characters only.
+# Defense-in-depth for the recovery correlation value: the per-run random
+# suffix already makes duplicate hostnames vanishingly unlikely, but teardown's
+# hostname recovery requires a single match, so refuse to create a second
+# server behind an already-live hostname (a pre-existing operator-created
+# duplicate, or a suffix collision) — a duplicate would strand a billed host
+# whose create response was unparseable. HOSTNAME_VALUE is built above from
+# URL-safe characters only.
 latitude_request GET \
   "/servers?filter%5Bhostname%5D=${HOSTNAME_VALUE}&page%5Bsize%5D=200" \
   "" "$WORK_DIR/hostname-collision.json" 200

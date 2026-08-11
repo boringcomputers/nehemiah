@@ -372,7 +372,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "authorized": self.headers.get("authorization") == "Bearer latitude-test-api-key-1234567890",
                 "hostname": wanted,
             })
-            if wanted == "collision-host":
+            if wanted.startswith("collision-host-"):
                 self.respond(200, {"data": [
                     {"id": "sv_conflict9999", "attributes": {"hostname": wanted}},
                 ]})
@@ -426,6 +426,7 @@ assert_no_secret_output "$TASK_TEMP/provision.stderr"
 python3 - "$TASK_TEMP/api.log" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 events = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
@@ -439,7 +440,8 @@ assert [event["event"] for event in events] == [
 ]
 assert events[0]["authorized"] is True
 assert events[1]["authorized"] is True
-assert events[1]["hostname"] == "nehemiah-metal-01"
+# Every run appends a unique random suffix to the recovery hostname.
+assert re.fullmatch(r"nehemiah-metal-01-[0-9a-f]{8}", events[1]["hostname"])
 assert events[2]["authorized"] is True
 assert events[2]["project"] == "proj_test1234"
 assert events[2]["cloud_config"] is True

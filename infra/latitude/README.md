@@ -117,11 +117,17 @@ export LATITUDE_PROJECT=proj_...
 export LATITUDE_SSH_KEY=ssh_...
 export LATITUDE_PLAN=c3-small-x86
 export LATITUDE_SITE=MIA2
-export LATITUDE_HOSTNAME=nehemiah-metal-01
+export LATITUDE_HOSTNAME=nehemiah-metal-01   # base name, max 23 chars
 
 infra/latitude/provision.sh \
   --config "${XDG_CONFIG_HOME:-$HOME/.config}/nehemiah/latitude-host.env"
 ```
+
+The hostname doubles as the durable recovery correlation value for the
+billable create, so every run appends a unique random suffix to the base
+(`nehemiah-metal-01-3fa9c2d1`) and refuses to provision while any live server
+already carries the resulting name. The full suffixed hostname is what
+provisioning records for `teardown.sh` recovery.
 
 The provisioner:
 
