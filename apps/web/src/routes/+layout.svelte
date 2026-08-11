@@ -35,6 +35,10 @@
 	>
 	<div class="flex items-center gap-5">
 		<a href={resolve('/docs')} class="text-ink-subtle transition-colors hover:text-ink">Docs</a>
+		<a href={resolve('/status')} class="text-ink-subtle transition-colors hover:text-ink">Status</a>
+		<a href={resolve('/dashboard')} class="text-ink-subtle transition-colors hover:text-ink"
+			>Cloud</a
+		>
 		<a
 			href="https://github.com/boringcomputers/nehemiah"
 			target="_blank"

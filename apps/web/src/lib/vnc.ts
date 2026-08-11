@@ -9,6 +9,10 @@ export interface VncHandle {
 export interface VncOptions {
 	screen: HTMLDivElement;
 	machineId: string;
+	connection?: {
+		readonly url: string;
+		readonly protocols?: readonly string[];
+	};
 	viewOnly?: boolean;
 	qualityLevel?: number;
 	compressionLevel?: number;
@@ -32,8 +36,10 @@ export async function connectVnc(
 
 	teardownScreen(opts.screen);
 
-	const url = wsUrl(`/v1/machines/${opts.machineId}/vnc`);
-	const rfb = new RFB(opts.screen, url, {});
+	const url = opts.connection?.url ?? wsUrl(`/v1/machines/${opts.machineId}/vnc`);
+	const rfb = new RFB(opts.screen, url, {
+		wsProtocols: opts.connection?.protocols ? [...opts.connection.protocols] : undefined
+	});
 	rfb.scaleViewport = true;
 	rfb.resizeSession = false;
 	rfb.background = '#000';

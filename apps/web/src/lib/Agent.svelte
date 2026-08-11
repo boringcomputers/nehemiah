@@ -93,27 +93,23 @@
 		agentStarted = true;
 		phase = 'live';
 		caption = 'The AI is looking at the screen…';
-		ws = connectAgent(
-			machine.id,
-			`/v1/machines/${machine.id}/agent?goal=${encodeURIComponent(activeGoal)}`,
-			{
-				onSay: (text) => (caption = text),
-				onDone: (text) => {
+		ws = connectAgent(machine.id, `/v1/machines/${machine.id}/agent`, activeGoal, {
+			onSay: (text) => (caption = text),
+			onDone: (text) => {
+				phase = 'done';
+				caption = text || 'The AI finished the task.';
+			},
+			onError: (text) => {
+				phase = 'error';
+				error = text || 'the agent stopped unexpectedly';
+			},
+			onClose: () => {
+				if (phase === 'live') {
 					phase = 'done';
-					caption = text || 'The AI finished the task.';
-				},
-				onError: (text) => {
-					phase = 'error';
-					error = text || 'the agent stopped unexpectedly';
-				},
-				onClose: () => {
-					if (phase === 'live') {
-						phase = 'done';
-						caption = 'The AI finished.';
-					}
+					caption = 'The AI finished.';
 				}
 			}
-		);
+		});
 	}
 
 	export function close() {

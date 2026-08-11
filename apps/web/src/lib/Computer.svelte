@@ -84,23 +84,19 @@
 		if (!goal || agentRunning || !machine) return;
 		agentRunning = true;
 		agentLine = 'thinking…';
-		agentWs = connectAgent(
-			machine.id,
-			`/v1/machines/${machine.id}/shell-agent?goal=${encodeURIComponent(goal)}`,
-			{
-				onDone: (text) => {
-					agentLine = text || 'done ✓';
-					agentRunning = false;
-				},
-				onError: (text) => {
-					agentLine = '⚠ ' + text;
-					agentRunning = false;
-				},
-				onSay: (text) => (agentLine = text),
-				onAction: (text) => (agentLine = text),
-				onClose: () => (agentRunning = false)
-			}
-		);
+		agentWs = connectAgent(machine.id, `/v1/machines/${machine.id}/shell-agent`, goal, {
+			onDone: (text) => {
+				agentLine = text || 'done ✓';
+				agentRunning = false;
+			},
+			onError: (text) => {
+				agentLine = '⚠ ' + text;
+				agentRunning = false;
+			},
+			onSay: (text) => (agentLine = text),
+			onAction: (text) => (agentLine = text),
+			onClose: () => (agentRunning = false)
+		});
 	}
 
 	function aiKey(e: KeyboardEvent) {
@@ -193,6 +189,7 @@
 					<span class="font-mono text-[11px] font-semibold text-accent">AI</span>
 					<input
 						bind:value={agentGoal}
+						maxlength="4096"
 						onkeydown={aiKey}
 						disabled={agentRunning}
 						placeholder="tell the computer what to do — e.g. “build a snake game in python and run it”"
