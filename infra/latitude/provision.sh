@@ -390,6 +390,17 @@ PY
 chmod 0600 "$WORK_DIR/create-server.json"
 latitude_request POST /servers "$WORK_DIR/create-server.json" \
   "$WORK_DIR/create-server-response.json" 201
+# Persist the raw creation response to durable state before parsing. Latitude has
+# accepted the (billable) create, so an accepted-but-unparseable response must
+# still leave a 0600 record to identify and tear down the host — WORK_DIR is
+# removed on exit.
+mkdir -p "$STATE_DIR"
+chmod 0700 "$STATE_DIR"
+raw_creation_tmp="$(mktemp "$STATE_DIR/.created-server.XXXXXX")"
+cp -- "$WORK_DIR/create-server-response.json" "$raw_creation_tmp"
+chmod 0600 "$raw_creation_tmp"
+mv -- "$raw_creation_tmp" "$STATE_DIR/last-created-server.json"
+log "persisted the raw creation response to $STATE_DIR/last-created-server.json for recovery"
 SERVER_ID="$(python3 - "$WORK_DIR/create-server-response.json" <<'PY'
 import json
 import pathlib
