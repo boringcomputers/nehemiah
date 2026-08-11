@@ -159,7 +159,7 @@ test("checksum generation is sorted, deterministic, and verifies the exact matri
       assert.equal(policy.alpineRepositorySnapshot.release, "v3.23");
       assert.equal(
         policy.alpineRepositorySnapshot.capturedAt,
-        "2026-08-11T05:45:11Z",
+        "2026-08-11T14:55:44Z",
       );
       assert.equal(policy.npmRuntime.version, "11.19.0");
       assert.equal(policy.pythonRuntime.pip.version, "26.2.1");

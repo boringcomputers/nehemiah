@@ -590,7 +590,7 @@ for (const arch of ["amd64", "arm64"]) {
 invariant(
   parsedGuestPolicy.alpineRepositorySnapshot.release === "v3.23" &&
     parsedGuestPolicy.alpineRepositorySnapshot.capturedAt ===
-      "2026-08-11T05:45:11Z" &&
+      "2026-08-11T14:55:44Z" &&
     parsedGuestPolicy.alpineRepositorySnapshot.maxIndexAgeHours === 168,
   "guest APK indexes must match the reviewed security refresh",
 );
