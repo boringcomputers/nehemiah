@@ -299,6 +299,7 @@ import http.server
 import json
 import pathlib
 import sys
+import urllib.parse
 
 port_file, request_log = map(pathlib.Path, sys.argv[1:])
 
@@ -363,6 +364,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "provisionable_on": ["c3-small-x86"],
                 },
             }], "meta": {}})
+        elif self.path.startswith("/servers?"):
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            wanted = query.get("filter[hostname]", [""])[0]
+            self.record({
+                "event": "hostname_checked",
+                "authorized": self.headers.get("authorization") == "Bearer latitude-test-api-key-1234567890",
+                "hostname": wanted,
+            })
+            if wanted == "collision-host":
+                self.respond(200, {"data": [
+                    {"id": "sv_conflict9999", "attributes": {"hostname": wanted}},
+                ]})
+            else:
+                self.respond(200, {"data": []})
         elif self.path == "/servers/sv_test1234":
             self.record({"event": "server_read"})
             self.respond(200, {"data": {"id": "sv_test1234", "attributes": {
@@ -416,6 +431,7 @@ import sys
 events = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
 assert [event["event"] for event in events] == [
     "provider_image_read",
+    "hostname_checked",
     "user_data_created",
     "server_created",
     "server_read",
@@ -423,11 +439,13 @@ assert [event["event"] for event in events] == [
 ]
 assert events[0]["authorized"] is True
 assert events[1]["authorized"] is True
-assert events[1]["project"] == "proj_test1234"
-assert events[1]["cloud_config"] is True
+assert events[1]["hostname"] == "nehemiah-metal-01"
 assert events[2]["authorized"] is True
-assert events[2]["user_data"] == "ud_test1234"
-assert events[2]["billing"] == "hourly"
+assert events[2]["project"] == "proj_test1234"
+assert events[2]["cloud_config"] is True
+assert events[3]["authorized"] is True
+assert events[3]["user_data"] == "ud_test1234"
+assert events[3]["billing"] == "hourly"
 PY
 
 # A valid but unapproved opaque image id must fail before user-data creation or
@@ -454,6 +472,32 @@ assert_no_secret_output "$TASK_TEMP/unapproved.stdout"
 assert_no_secret_output "$TASK_TEMP/unapproved.stderr"
 [[ "$(wc -l < "$TASK_TEMP/api.log")" -eq $((events_before + 1)) ]]
 [[ "$(tail -n 1 "$TASK_TEMP/api.log")" == *'"event":"provider_image_read"'* ]]
+
+# A hostname already carried by a live server must fail before user-data
+# creation or a billable server POST: the hostname is the durable recovery
+# correlation value, so it has to identify exactly one server.
+events_before="$(wc -l < "$TASK_TEMP/api.log")"
+if LATITUDE_API_KEY=latitude-test-api-key-1234567890 \
+  LATITUDE_PROJECT=proj_test1234 \
+  LATITUDE_SSH_KEY=ssh_test1234 \
+  LATITUDE_HOSTNAME=collision-host \
+  LATITUDE_STATE_DIR="$TASK_TEMP/collision-state" \
+  LATITUDE_API_BASE="http://127.0.0.1:$FAKE_API_PORT" \
+  LATITUDE_ALLOW_HTTP_FOR_TESTS=1 \
+  LATITUDE_POLL_INTERVAL_SECONDS=0 \
+  LATITUDE_POLL_ATTEMPTS=2 \
+    "$REPOSITORY_ROOT/infra/latitude/provision.sh" \
+      --config "$CONFIG_FILE" \
+      > "$TASK_TEMP/collision.stdout" 2> "$TASK_TEMP/collision.stderr"; then
+  echo "provisioner created a server behind an already-live hostname" >&2
+  exit 1
+fi
+assert_no_secret_output "$TASK_TEMP/collision.stdout"
+assert_no_secret_output "$TASK_TEMP/collision.stderr"
+grep -Fq 'already uses hostname' "$TASK_TEMP/collision.stderr"
+[[ "$(wc -l < "$TASK_TEMP/api.log")" -eq $((events_before + 2)) ]]
+[[ "$(tail -n 1 "$TASK_TEMP/api.log")" == *'"event":"hostname_checked"'* ]]
+[[ ! -e "$TASK_TEMP/collision-state/last-created-hostname" ]]
 
 for script in \
   bootstrap.sh build-desktop-rootfs.sh build-rootfs.sh cloud-init.sh managed-host-preflight.sh net-setup.sh \

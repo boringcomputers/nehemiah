@@ -326,6 +326,44 @@ done
   || die "approved Latitude operating-system id was not found within the bounded inventory"
 log "validated approved Latitude operating-system id $LATITUDE_OS_ID for $PLAN"
 
+# The requested hostname is the durable recovery correlation value for this
+# create: teardown resolves it via the provider when no validated id exists,
+# and it requires a single match. Refuse to create a second server behind an
+# already-live hostname — a duplicate would make hostname recovery ambiguous
+# and could strand a billed host whose create response was unparseable.
+# HOSTNAME_VALUE is validated above to URL-safe characters only.
+latitude_request GET \
+  "/servers?filter%5Bhostname%5D=${HOSTNAME_VALUE}&page%5Bsize%5D=200" \
+  "" "$WORK_DIR/hostname-collision.json" 200
+python3 - "$WORK_DIR/hostname-collision.json" "$HOSTNAME_VALUE" <<'PY'
+import json
+import pathlib
+import sys
+
+response_path, hostname = sys.argv[1:]
+try:
+    response = json.loads(pathlib.Path(response_path).read_text())
+except (OSError, json.JSONDecodeError):
+    raise SystemExit("Latitude returned an invalid server-listing response") from None
+data = response.get("data") if isinstance(response, dict) else None
+if not isinstance(data, list):
+    raise SystemExit("Latitude returned an invalid server-listing page")
+matches = [
+    entry
+    for entry in data
+    if isinstance(entry, dict)
+    and isinstance(entry.get("attributes"), dict)
+    and entry["attributes"].get("hostname") == hostname
+]
+if matches:
+    raise SystemExit(
+        f"a live server already uses hostname {hostname!r}, so hostname recovery"
+        " would be ambiguous. Tear that host down first or set a different"
+        " LATITUDE_HOSTNAME."
+    )
+PY
+log "hostname $HOSTNAME_VALUE is not in use by any live server"
+
 python3 - "$RENDERED_USER_DATA" "$LATITUDE_PROJECT" "$HOSTNAME_VALUE" \
   > "$WORK_DIR/create-user-data.json" <<'PY'
 import base64
