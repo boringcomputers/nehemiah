@@ -24,6 +24,7 @@ import tarfile
 import tempfile
 import urllib.parse
 import urllib.request
+import zlib
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -542,7 +543,26 @@ def build(args: argparse.Namespace) -> None:
     inspect_archive(output, args.version, args.arch)
 
 
+def assert_intact_gzip_stream(archive: pathlib.Path, policy: dict) -> None:
+    # tarfile stops reading at the tar end-of-archive marker and never
+    # consumes the gzip trailer, so a truncated or tampered tail would
+    # otherwise extract and inspect cleanly. Decompress the entire stream
+    # (bounded by the extraction policy) so the CRC/length trailer is
+    # always validated.
+    limit = policy["limits"]["maxArchiveBytes"] + policy["limits"]["maxUnpackedBytes"]
+    decompressed = 0
+    try:
+        with gzip.open(archive, "rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                decompressed += len(block)
+                if decompressed > limit:
+                    fail("managed package archive exceeds its extraction policy")
+    except (OSError, EOFError, zlib.error) as error:
+        fail(f"managed package archive gzip stream is corrupt: {error}")
+
+
 def safe_extract(archive: pathlib.Path, destination: pathlib.Path, policy: dict) -> None:
+    assert_intact_gzip_stream(archive, policy)
     total = 0
     seen = set()
     with tarfile.open(archive, "r:gz") as bundle:

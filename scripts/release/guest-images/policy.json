@@ -3,33 +3,33 @@
   "rootfsProfile": "signed-developer-ext4-v1",
   "alpineRepositorySnapshot": {
     "release": "v3.23",
-    "capturedAt": "2026-08-09T10:08:00Z",
+    "capturedAt": "2026-08-11T05:45:11Z",
     "maxIndexAgeHours": 168,
     "architectures": {
       "amd64": {
         "apkArchitecture": "x86_64",
         "main": {
           "url": "https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/APKINDEX.tar.gz",
-          "sha256": "49f58afe62a4cfd6ae7434fce1e2561040f8d500f0b02ebbc2de86dcd6828925",
-          "publishedAt": "2026-08-07T14:00:48Z"
+          "sha256": "a1a2d3451af0489a8d7f16b253db1001d916ab58e60feaed081f605fb4ed0640",
+          "publishedAt": "2026-08-10T12:31:02Z"
         },
         "community": {
           "url": "https://dl-cdn.alpinelinux.org/alpine/v3.23/community/x86_64/APKINDEX.tar.gz",
-          "sha256": "4cd00267e46333285b9011fb052ff73879fd2384c0383cdfd9f41d56088b7ce4",
-          "publishedAt": "2026-08-05T10:04:43Z"
+          "sha256": "7e0789786820c9c522a53d3f40a72ebfa6d39d9b9c9fbaf6afffd9233302e949",
+          "publishedAt": "2026-08-10T12:33:12Z"
         }
       },
       "arm64": {
         "apkArchitecture": "aarch64",
         "main": {
           "url": "https://dl-cdn.alpinelinux.org/alpine/v3.23/main/aarch64/APKINDEX.tar.gz",
-          "sha256": "36de4080ea7a5fbe7468e561e3bfc75ad0953388cdfdc15be5d33ec685865a18",
-          "publishedAt": "2026-08-07T14:00:48Z"
+          "sha256": "b2d21b682f3642b1e23a79c4a75cec1255443c4aad4a9364236fd79a0e924025",
+          "publishedAt": "2026-08-10T12:18:59Z"
         },
         "community": {
           "url": "https://dl-cdn.alpinelinux.org/alpine/v3.23/community/aarch64/APKINDEX.tar.gz",
-          "sha256": "e3e38ce10db429436d5f484303838da6c15f119a44e1391a7e0f309187dcabfc",
-          "publishedAt": "2026-08-05T10:04:43Z"
+          "sha256": "5d748ab69d207c6ce056d5f90036b38dd5195b3c047df0df08b7ed01c7362d21",
+          "publishedAt": "2026-08-10T12:19:54Z"
         }
       }
     }
