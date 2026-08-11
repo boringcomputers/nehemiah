@@ -397,6 +397,11 @@ latitude_request POST /servers "$WORK_DIR/create-server.json" \
 # lookup when the id cannot be validated from the response body.
 mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
+# A new (billable) host now exists, so any previously recorded server_id is stale
+# and must not mask this one during teardown. Clear it before persisting the new
+# recovery inputs: if parsing the id below fails, teardown falls through to
+# hostname recovery for THIS host instead of deleting the prior server.
+rm -f -- "$STATE_DIR/server_id"
 printf '%s\n' "$HOSTNAME_VALUE" > "$WORK_DIR/last-created-hostname"
 chmod 0600 "$WORK_DIR/last-created-hostname"
 mv -- "$WORK_DIR/last-created-hostname" "$STATE_DIR/last-created-hostname"
