@@ -1,0 +1,12 @@
+{
+	"extends": "@nehemiah/typescript-config/base.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"target": "ES2023",
+		"lib": ["ES2023"],
+		"types": ["node"],
+		"noEmit": true
+	},
+	"include": ["alchemy.run.ts"]
+}

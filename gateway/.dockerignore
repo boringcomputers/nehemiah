@@ -1,0 +1,5 @@
+gateway
+*.test
+*_test.go
+Dockerfile
+.dockerignore

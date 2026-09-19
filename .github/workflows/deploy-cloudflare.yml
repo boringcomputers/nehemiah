@@ -1,0 +1,129 @@
+name: Deploy Cloudflare
+
+# Everything that runs on Cloudflare, via Alchemy (apps/web/alchemy.run.ts):
+# main -> stage `prod` (site, control plane and gateway containers, edge
+# Worker, Access, R2); pull requests from this repository -> stage `pr-<n>`
+# (site only, workers.dev), destroyed when the pull request closes.
+# See docs/cloudflare.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "apps/nehemiah/**"
+      - "gateway/**"
+      - "packages/typescript-config/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".dockerignore"
+      - ".github/workflows/deploy-cloudflare.yml"
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    paths:
+      - "apps/web/**"
+      - "packages/typescript-config/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-cloudflare.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloudflare-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  STAGE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || 'prod' }}
+
+jobs:
+  deploy:
+    name: alchemy deploy
+    # Forks cannot read the deploy secrets, so previews are limited to branches
+    # in this repository.
+    if: >-
+      github.event.action != 'closed' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # The control-plane image never migrates; apply migrations with the
+      # migration role before the new containers roll out.
+      - name: Apply control-plane migrations
+        if: env.STAGE == 'prod'
+        run: npm run build -w @nehemiah/nehemiah && npm run migrate -w @nehemiah/nehemiah
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      - name: Deploy stage ${{ env.STAGE }}
+        run: npm run deploy -w web -- --stage "$STAGE" --yes
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Site settings, forwarded to the site Worker only when non-empty.
+          PUBLIC_NEHEMIAH_URL: ${{ vars.PUBLIC_NEHEMIAH_URL }}
+          PRIVATE_NEHEMIAH_URL: ${{ vars.PRIVATE_NEHEMIAH_URL }}
+          PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          PUBLIC_CLERK_FRONTEND_API: ${{ vars.PUBLIC_CLERK_FRONTEND_API }}
+          STATUS_CONTROL_PLANE_URL: ${{ vars.STATUS_CONTROL_PLANE_URL }}
+          STATUS_GATEWAY_URL: ${{ vars.STATUS_GATEWAY_URL }}
+          PUBLIC_SUPPORT_URL: ${{ vars.PUBLIC_SUPPORT_URL }}
+          PUBLIC_SUPPORT_EMAIL: ${{ vars.PUBLIC_SUPPORT_EMAIL }}
+          # Edge and container settings (prod stage only; defaults in apps/web/.env.example).
+          SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+          API_HOSTNAME: ${{ vars.API_HOSTNAME }}
+          GATEWAY_HOSTNAME: ${{ vars.GATEWAY_HOSTNAME }}
+          PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
+          PREVIEW_ZONE_NAME: ${{ vars.PREVIEW_ZONE_NAME }}
+          HOST_TUNNEL_DOMAIN: ${{ vars.HOST_TUNNEL_DOMAIN }}
+          FLEET_ACCESS_TOKEN_ID: ${{ vars.FLEET_ACCESS_TOKEN_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          NEHEMIAH_SERVICE_VERSION: ${{ vars.NEHEMIAH_SERVICE_VERSION }}
+          NEHEMIAH_OTEL_ENDPOINT: ${{ vars.NEHEMIAH_OTEL_ENDPOINT }}
+          NEHEMIAH_DEFAULT_REGION: ${{ vars.NEHEMIAH_DEFAULT_REGION }}
+          NEHEMIAH_HOST_CIDRS: ${{ vars.NEHEMIAH_HOST_CIDRS }}
+          CLERK_ISSUER: ${{ vars.CLERK_ISSUER }}
+          CLERK_AUDIENCE: ${{ vars.CLERK_AUDIENCE }}
+          # Container secrets (prod stage only).
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NEHEMIAH_HOST_CREDENTIAL_KEY: ${{ secrets.NEHEMIAH_HOST_CREDENTIAL_KEY }}
+          NEHEMIAH_GATEWAY_TOKEN: ${{ secrets.NEHEMIAH_GATEWAY_TOKEN }}
+          NEHEMIAH_GATEWAY_SECRET: ${{ secrets.NEHEMIAH_GATEWAY_SECRET }}
+          NEHEMIAH_DEVICE_CODE_PEPPER: ${{ secrets.NEHEMIAH_DEVICE_CODE_PEPPER }}
+          NEHEMIAH_OTEL_AUTHORIZATION: ${{ secrets.NEHEMIAH_OTEL_AUTHORIZATION }}
+          GATEWAY_OTEL_AUTHORIZATION: ${{ secrets.GATEWAY_OTEL_AUTHORIZATION }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+
+  cleanup:
+    name: alchemy destroy (closed preview)
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Refuse to destroy prod
+        run: |
+          if [ "$STAGE" = "prod" ]; then
+            echo "refusing to destroy the prod stage from a cleanup job" >&2
+            exit 1
+          fi
+      - name: Destroy stage ${{ env.STAGE }}
+        run: npm run destroy -w web -- --stage "$STAGE" --yes
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

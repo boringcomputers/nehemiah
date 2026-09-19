@@ -4,6 +4,7 @@ build
 .svelte-kit
 .turbo
 .vercel
+.alchemy
 coverage
 package-lock.json
 *.min.js

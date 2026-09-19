@@ -77,6 +77,12 @@ npm run dev -w web
 
 Full REST + WebSocket API in the [docs](https://boringcomputers.com/docs).
 
+The site itself deploys to Cloudflare Workers with [Alchemy](https://alchemy.run)
+(`apps/web/alchemy.run.ts`), together with the edge in front of the managed
+cloud: the control plane and gateway as Cloudflare Containers behind an edge
+Worker, Access, DNS, and R2. See
+[`docs/cloudflare.md`](docs/cloudflare.md).
+
 **From any AI** — an MCP server
 ([`nehemiah-mcp`](packages/mcp)) lets Claude Desktop, Cursor, and other
 agents spin up and drive your computers as a tool:
@@ -111,11 +117,12 @@ hosts are provisioned from a signed release via the managed runbook
 A [Turborepo](https://turbo.build/repo) monorepo (npm workspaces):
 
 ```
-apps/web/          the site — SvelteKit
+apps/web/          the site — SvelteKit; alchemy.run.ts deploys it + the Cloudflare edge
 nehemiahd/           the host daemon — Go, runs the microVMs
 packages/sdk/      nehemiah-sdk — Effect-native TypeScript client
 packages/mcp/      nehemiah-mcp — MCP server
 infra/latitude/    managed-host provisioning (provision/teardown), image builds, networking
+infra/cloudflare/  cloudflared unit for each host's tunnel (ADR 0005)
 ```
 
 ```sh

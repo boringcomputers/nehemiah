@@ -20,17 +20,29 @@ const defaultAllowedHostCIDRs = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fd00::/
 // particular, neither the control-plane URL nor the host port is caller
 // selectable.
 type Config struct {
-	Production                     bool
-	Addr                           string
-	ControlPlaneURL                string
-	ControlPlaneCAFile             string
-	ControlPlaneServerName         string
-	GatewayToken                   string
-	CapabilitySecret               string
-	PreviewBaseDomain              string
-	TrustedSiteDomain              string
-	HostPort                       int
-	AllowedHostCIDRs               []netip.Prefix
+	Production             bool
+	Addr                   string
+	ControlPlaneURL        string
+	ControlPlaneCAFile     string
+	ControlPlaneServerName string
+	GatewayToken           string
+	CapabilitySecret       string
+	PreviewBaseDomain      string
+	TrustedSiteDomain      string
+	HostPort               int
+	AllowedHostCIDRs       []netip.Prefix
+	// HostTransport selects how hosts are reached (see host_transport.go).
+	// The overlay dials AllowedHostCIDRs addresses directly; the Cloudflare
+	// Tunnel transport dials <label>.HostTunnelDomain over TLS with the
+	// Access service token below. AllowedHostCIDRs governs both.
+	HostTransport          string
+	HostTunnelDomain       string
+	HostAccessClientID     string
+	HostAccessClientSecret string
+	// Optional Access service token sent on every control-plane request, for
+	// a control plane whose internal routes sit behind Cloudflare Access.
+	ControlPlaneAccessClientID     string
+	ControlPlaneAccessClientSecret string
 	ControlPlaneTimeout            time.Duration
 	CapabilityRevalidationInterval time.Duration
 	StreamMaxDuration              time.Duration
@@ -64,7 +76,17 @@ func LoadConfig() (Config, error) {
 		PreviewBaseDomain:      strings.ToLower(strings.TrimSpace(os.Getenv("NEHEMIAH_PREVIEW_BASE_DOMAIN"))),
 		TrustedSiteDomain:      strings.ToLower(strings.TrimSpace(os.Getenv("NEHEMIAH_TRUSTED_SITE_DOMAIN"))),
 		HostPort:               envInt("NEHEMIAH_HOST_PORT", 8080),
-		ControlPlaneTimeout:    envDuration("NEHEMIAH_GATEWAY_CONTROL_TIMEOUT", 10*time.Second),
+		HostTransport:          envString("NEHEMIAH_GATEWAY_HOST_TRANSPORT", hostTransportOverlay),
+		HostTunnelDomain:       strings.ToLower(strings.TrimSpace(os.Getenv("NEHEMIAH_GATEWAY_HOST_TUNNEL_DOMAIN"))),
+		HostAccessClientID:     strings.TrimSpace(os.Getenv("NEHEMIAH_GATEWAY_HOST_ACCESS_CLIENT_ID")),
+		HostAccessClientSecret: strings.TrimSpace(os.Getenv("NEHEMIAH_GATEWAY_HOST_ACCESS_CLIENT_SECRET")),
+		ControlPlaneAccessClientID: strings.TrimSpace(
+			os.Getenv("NEHEMIAH_GATEWAY_CONTROL_PLANE_ACCESS_CLIENT_ID"),
+		),
+		ControlPlaneAccessClientSecret: strings.TrimSpace(
+			os.Getenv("NEHEMIAH_GATEWAY_CONTROL_PLANE_ACCESS_CLIENT_SECRET"),
+		),
+		ControlPlaneTimeout: envDuration("NEHEMIAH_GATEWAY_CONTROL_TIMEOUT", 10*time.Second),
 		CapabilityRevalidationInterval: envDuration(
 			"NEHEMIAH_GATEWAY_CAPABILITY_REVALIDATION_INTERVAL",
 			5*time.Second,
@@ -169,6 +191,27 @@ func (c Config) Validate() error {
 	}
 	if len(c.AllowedHostCIDRs) == 0 {
 		return errors.New("at least one private host CIDR is required")
+	}
+	switch c.HostTransport {
+	case "", hostTransportOverlay:
+		if c.HostTunnelDomain != "" || c.HostAccessClientID != "" || c.HostAccessClientSecret != "" {
+			return errors.New("NEHEMIAH_GATEWAY_HOST_TRANSPORT must be cloudflare-tunnel when tunnel settings are provided")
+		}
+	case hostTransportCloudflareTunnel:
+		if net.ParseIP(c.HostTunnelDomain) != nil || !validDNSName(c.HostTunnelDomain) || !strings.Contains(c.HostTunnelDomain, ".") {
+			return errors.New("NEHEMIAH_GATEWAY_HOST_TUNNEL_DOMAIN must be the DNS suffix hosts publish their tunnels under")
+		}
+		if !validAccessCredential(c.HostAccessClientID) || !validAccessCredential(c.HostAccessClientSecret) {
+			return errors.New("NEHEMIAH_GATEWAY_HOST_ACCESS_CLIENT_ID and NEHEMIAH_GATEWAY_HOST_ACCESS_CLIENT_SECRET must carry the Access service token")
+		}
+	default:
+		return errors.New("NEHEMIAH_GATEWAY_HOST_TRANSPORT must be overlay or cloudflare-tunnel")
+	}
+	if (c.ControlPlaneAccessClientID == "") != (c.ControlPlaneAccessClientSecret == "") {
+		return errors.New("NEHEMIAH_GATEWAY_CONTROL_PLANE_ACCESS_CLIENT_ID and NEHEMIAH_GATEWAY_CONTROL_PLANE_ACCESS_CLIENT_SECRET must be set together")
+	}
+	if c.ControlPlaneAccessClientID != "" && (!validAccessCredential(c.ControlPlaneAccessClientID) || !validAccessCredential(c.ControlPlaneAccessClientSecret)) {
+		return errors.New("NEHEMIAH_GATEWAY_CONTROL_PLANE_ACCESS_CLIENT_ID and NEHEMIAH_GATEWAY_CONTROL_PLANE_ACCESS_CLIENT_SECRET must carry the Access service token")
 	}
 	if c.ControlPlaneTimeout <= 0 || c.StreamMaxDuration <= 0 {
 		return errors.New("gateway timeouts must be positive")

@@ -5,7 +5,7 @@
     "build": {
       "dependsOn": ["^build"],
       "env": ["PUBLIC_NEHEMIAH_URL", "PUBLIC_BORING_URL"],
-      "outputs": [".svelte-kit/**", "build/**", ".vercel/**", "dist/**"]
+      "outputs": [".svelte-kit/**", "build/**", "dist/**"]
     },
     "dev": {
       "cache": false,

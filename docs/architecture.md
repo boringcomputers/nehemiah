@@ -92,7 +92,8 @@ the local/self-hosted prototype contract remains useful as a development target.
 ## One-box prototype
 
 Everything below runs on a **single Latitude.sh `c3.small.x86` in MIA2** (Ubuntu
-24.04, 6 cores / 32 GB, `/dev/kvm`). The SvelteKit hero site is on Vercel; the
+24.04, 6 cores / 32 GB, `/dev/kvm`). The SvelteKit hero site runs on Cloudflare
+Workers (deployed with Alchemy, see [`cloudflare.md`](cloudflare.md)); the
 browser talks to nehemiahd over an SSH-tunneled WebSocket.
 
 ```
@@ -103,7 +104,7 @@ browser talks to nehemiahd over an SSH-tunneled WebSocket.
           │ HTTPS           │   │  REST host API + /tty WebSocket bridge           │  │
           ▼                 │   │  registry (sync.Mutex) · TTL reaper · NEHEMIAH_MAX │  │
    ┌──────────────┐  WS/HTTP│   └───┬───────────────┬───────────────┬─────────────┘  │
-   │ Vercel hero  │  (SSH   │       │ stdin/stdout  │ stdin/stdout  │ stdin/stdout   │
+   │ Workers hero │  (SSH   │       │ stdin/stdout  │ stdin/stdout  │ stdin/stdout   │
    │ site (Svelte)│  tunnel)│       │ (serial)      │ (serial)      │ (serial)       │
    │  ── WS ───────┼────────────────┼───────────────┼───────────────┼──────────      │
    └──────────────┘         │       ▼               ▼               ▼                │

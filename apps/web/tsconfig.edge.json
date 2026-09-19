@@ -1,0 +1,12 @@
+{
+	"extends": "@nehemiah/typescript-config/base.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"target": "ES2023",
+		"lib": ["ES2023"],
+		"types": ["@cloudflare/workers-types"],
+		"noEmit": true
+	},
+	"include": ["edge/**/*.ts"]
+}

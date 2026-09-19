@@ -1,0 +1,14 @@
+# Build context for apps/nehemiah/Dockerfile (repository root). Allow only
+# what the npm workspace install and the control-plane build need.
+*
+!package.json
+!package-lock.json
+!.npmrc
+!apps/nehemiah
+!apps/web/package.json
+!packages
+**/node_modules
+**/dist
+**/.turbo
+**/test
+**/*.test.ts
