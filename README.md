@@ -79,7 +79,8 @@ Full REST + WebSocket API in the [docs](https://boringcomputers.com/docs).
 
 The site itself deploys to Cloudflare Workers with [Alchemy](https://alchemy.run)
 (`apps/web/alchemy.run.ts`), together with the edge in front of the managed
-cloud: custom domain, origin tunnel, DNS, and R2. See
+cloud: the control plane and gateway as Cloudflare Containers behind an edge
+Worker, Access, DNS, and R2. See
 [`docs/cloudflare.md`](docs/cloudflare.md).
 
 **From any AI** — an MCP server
@@ -121,7 +122,7 @@ nehemiahd/           the host daemon — Go, runs the microVMs
 packages/sdk/      nehemiah-sdk — Effect-native TypeScript client
 packages/mcp/      nehemiah-mcp — MCP server
 infra/latitude/    managed-host provisioning (provision/teardown), image builds, networking
-infra/cloudflare/  cloudflared unit for the origin VM behind the tunnel
+infra/cloudflare/  cloudflared unit for each host's tunnel (ADR 0005)
 ```
 
 ```sh

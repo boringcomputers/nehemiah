@@ -1,28 +1,39 @@
-# Cloudflare Tunnel connector for the Nehemiah origin VM (the machine that
-# runs apps/nehemiah and gateway/). Terminates api.<site>, gateway.<site>, and
-# *.<preview base domain> for the tunnel declared in apps/web/alchemy.run.ts.
+# Cloudflare Tunnel connector for one Nehemiah host (docs/nehemiah/adr/0005).
+# Publishes nehemiahd's internal API at <address label>.<host tunnel domain>,
+# where the label is the host's overlay address with dashes (10.64.0.7 ->
+# 10-64-0-7). Cloudflare Access admits only the stack's service token there.
 #
-# Install (as root on the origin VM):
+# Install (as root on the host, after infra/latitude provisioning):
 #   install -m 0755 cloudflared /usr/local/bin/cloudflared   # https://github.com/cloudflare/cloudflared/releases
-#   install -d -m 0750 /etc/nehemiah
-#   printf 'TUNNEL_TOKEN=%s\n' "$(cloudflared tunnel token <tunnel id>)" > /etc/nehemiah/cloudflared.env
-#   chmod 0600 /etc/nehemiah/cloudflared.env
+#   cloudflared tunnel login                                  # once per operator, not per host
+#   cloudflared tunnel create host-10-64-0-7
+#   cloudflared tunnel route dns host-10-64-0-7 10-64-0-7.hosts.boringcomputers.com
+#   install -d -m 0750 /etc/cloudflared
+#   install -m 0600 ~/.cloudflared/<tunnel id>.json /etc/cloudflared/credentials.json
+#   cat > /etc/cloudflared/config.yml <<'YAML'
+#   tunnel: <tunnel id>
+#   credentials-file: /etc/cloudflared/credentials.json
+#   no-autoupdate: true
+#   ingress:
+#     - hostname: 10-64-0-7.hosts.boringcomputers.com
+#       service: http://10.64.0.7:8080        # NEHEMIAH_ADVERTISE_ADDRESS:8080
+#     - service: http_status:404
+#   YAML
 #   install -m 0644 cloudflared.service /etc/systemd/system/cloudflared.service
 #   systemctl enable --now cloudflared
 #
-# The tunnel id is a stack output of `npm run deploy -- --stage prod`; the
-# token is minted by a logged-in cloudflared (`cloudflared tunnel login`).
+# The overlay address stays the host's identity; only the path to it changes.
+# Keep the host firewall rejecting inbound traffic: cloudflared connects out.
 # See docs/cloudflare.md.
 [Unit]
-Description=Cloudflare Tunnel connector (Nehemiah origin)
+Description=Cloudflare Tunnel connector (Nehemiah host)
 Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/nehemiah/cloudflared.env
-ExecStart=/usr/local/bin/cloudflared --no-autoupdate tunnel run
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
