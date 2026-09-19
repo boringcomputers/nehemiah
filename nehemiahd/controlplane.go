@@ -343,6 +343,10 @@ func (client *controlPlaneClient) postJSON(ctx context.Context, path, credential
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "nehemiahd/"+Version)
+	if client.cfg.ControlPlaneAccessClientID != "" {
+		request.Header.Set("CF-Access-Client-Id", client.cfg.ControlPlaneAccessClientID)
+		request.Header.Set("CF-Access-Client-Secret", client.cfg.ControlPlaneAccessClientSecret)
+	}
 	client.telemetry.inject(ctx, request.Header)
 
 	response, err := client.httpClient.Do(request)

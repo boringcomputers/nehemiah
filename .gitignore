@@ -7,6 +7,7 @@ node_modules
 # Build output (per-workspace outputs are also ignored in each app)
 .output
 .vercel
+.alchemy
 .netlify
 .wrangler
 .svelte-kit

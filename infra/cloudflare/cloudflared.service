@@ -1,0 +1,43 @@
+# Cloudflare Tunnel connector for the Nehemiah origin VM (the machine that
+# runs apps/nehemiah and gateway/). Terminates api.<site>, gateway.<site>, and
+# *.<preview base domain> for the tunnel declared in apps/web/alchemy.run.ts.
+#
+# Install (as root on the origin VM):
+#   install -m 0755 cloudflared /usr/local/bin/cloudflared   # https://github.com/cloudflare/cloudflared/releases
+#   install -d -m 0750 /etc/nehemiah
+#   printf 'TUNNEL_TOKEN=%s\n' "$(cloudflared tunnel token <tunnel id>)" > /etc/nehemiah/cloudflared.env
+#   chmod 0600 /etc/nehemiah/cloudflared.env
+#   install -m 0644 cloudflared.service /etc/systemd/system/cloudflared.service
+#   systemctl enable --now cloudflared
+#
+# The tunnel id is a stack output of `npm run deploy -- --stage prod`; the
+# token is minted by a logged-in cloudflared (`cloudflared tunnel login`).
+# See docs/cloudflare.md.
+[Unit]
+Description=Cloudflare Tunnel connector (Nehemiah origin)
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/nehemiah/cloudflared.env
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate tunnel run
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,11 @@
 import { isIP } from 'node:net';
 import { Data, Effect, Redacted } from 'effect';
 import type { ApiRateLimitConfig } from './auth/api-admission.js';
+import {
+	HostTransportError,
+	validateHostTransport,
+	type HostTransport
+} from './clients/host-transport.js';
 import { productionDatabaseUrlIssue } from './db/url.js';
 
 export type Environment = 'development' | 'test' | 'production';
@@ -51,6 +56,8 @@ export interface ServiceConfig {
 	readonly trustedSiteDomain?: string;
 	readonly hostCidrs: ReadonlyArray<string>;
 	readonly hostPort: number;
+	/** How host internal APIs are reached; the overlay unless configured otherwise (ADR 0005). */
+	readonly hostTransport: HostTransport;
 	readonly clerkIssuer?: string;
 	readonly clerkAudience?: string;
 	readonly hostStaleAfterMs: number;
@@ -75,6 +82,59 @@ const integer = (env: NodeJS.ProcessEnv, name: string, fallback: number) => {
 		throw new ConfigError({ variable: name, message: 'must be a positive integer' });
 	}
 	return value;
+};
+
+/**
+ * Host transport selection (ADR 0005). `overlay` is the default and keeps the
+ * WireGuard contract untouched. `cloudflare-tunnel` reaches each host through
+ * its own tunnel at `<address label>.<NEHEMIAH_HOST_TUNNEL_DOMAIN>` with the
+ * Access service token in NEHEMIAH_HOST_ACCESS_CLIENT_ID / _SECRET.
+ */
+const loadHostTransport = (env: NodeJS.ProcessEnv, hostPort: number): HostTransport => {
+	const kind = env.NEHEMIAH_HOST_TRANSPORT?.trim() || 'overlay';
+	const domain = env.NEHEMIAH_HOST_TUNNEL_DOMAIN?.trim().toLowerCase();
+	const clientId = env.NEHEMIAH_HOST_ACCESS_CLIENT_ID?.trim();
+	const clientSecret = env.NEHEMIAH_HOST_ACCESS_CLIENT_SECRET?.trim();
+	if (kind !== 'overlay' && kind !== 'cloudflare-tunnel') {
+		throw new ConfigError({
+			variable: 'NEHEMIAH_HOST_TRANSPORT',
+			message: 'must be overlay or cloudflare-tunnel'
+		});
+	}
+	if (kind === 'overlay') {
+		if (domain || clientId || clientSecret) {
+			throw new ConfigError({
+				variable: 'NEHEMIAH_HOST_TRANSPORT',
+				message: 'must be cloudflare-tunnel when tunnel settings are provided'
+			});
+		}
+		return { kind, port: hostPort };
+	}
+	if (!domain) {
+		throw new ConfigError({
+			variable: 'NEHEMIAH_HOST_TUNNEL_DOMAIN',
+			message: 'must be the DNS suffix hosts publish their tunnels under'
+		});
+	}
+	if (!clientId || !clientSecret) {
+		throw new ConfigError({
+			variable: 'NEHEMIAH_HOST_ACCESS_CLIENT_ID',
+			message: 'and NEHEMIAH_HOST_ACCESS_CLIENT_SECRET must both carry the Access service token'
+		});
+	}
+	try {
+		return validateHostTransport({
+			kind,
+			domain,
+			accessClientId: clientId,
+			accessClientSecret: Redacted.make(clientSecret)
+		});
+	} catch (error) {
+		if (error instanceof HostTransportError) {
+			throw new ConfigError({ variable: 'NEHEMIAH_HOST_TUNNEL_DOMAIN', message: error.message });
+		}
+		throw error;
+	}
 };
 
 const boolean = (env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean => {
@@ -780,6 +840,8 @@ export const loadConfig = (
 			if (!hostCidrs.length) {
 				throw new ConfigError({ variable: 'NEHEMIAH_HOST_CIDRS', message: 'must not be empty' });
 			}
+			const hostPort = integer(env, 'NEHEMIAH_HOST_PORT', 8080);
+			const hostTransport = loadHostTransport(env, hostPort);
 			return {
 				environment,
 				host: env.NEHEMIAH_HOST ?? '0.0.0.0',
@@ -794,7 +856,8 @@ export const loadConfig = (
 				previewBaseDomain,
 				trustedSiteDomain,
 				hostCidrs,
-				hostPort: integer(env, 'NEHEMIAH_HOST_PORT', 8080),
+				hostPort,
+				hostTransport,
 				clerkIssuer: env.CLERK_ISSUER,
 				clerkAudience: env.CLERK_AUDIENCE,
 				hostStaleAfterMs: integer(env, 'NEHEMIAH_HOST_STALE_MS', 30_000),

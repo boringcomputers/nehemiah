@@ -3,10 +3,13 @@ node_modules
 # Output
 .output
 .vercel
+.alchemy
 .netlify
 .wrangler
 /.svelte-kit
 /build
+# Alchemy's Cloudflare adapter writes the workerd bundle here during deploys.
+/dist
 
 # OS
 .DS_Store

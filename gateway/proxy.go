@@ -358,6 +358,10 @@ func (g *gateway) proxyToHost(w http.ResponseWriter, r *http.Request, route capa
 			request.Out.Header["X-Forwarded-For"] = nil
 			request.Out.Header.Set("Authorization", "Bearer "+resolved.HostToken)
 			request.Out.Header.Set("X-Nehemiah-Lease-ID", resolved.LeaseID)
+			if g.cfg.HostTransport == hostTransportCloudflareTunnel {
+				request.Out.Header.Set(accessClientIDHeader, g.cfg.HostAccessClientID)
+				request.Out.Header.Set(accessClientSecretHeader, g.cfg.HostAccessClientSecret)
+			}
 			if id := requestID(request.In.Context()); id != "" {
 				request.Out.Header.Set("X-Request-ID", id)
 			}
@@ -414,6 +418,12 @@ func (g *gateway) hostTarget(rawAddress string) (*url.URL, string, error) {
 	if !allowed {
 		return nil, "", errors.New("host address is outside the private overlay")
 	}
+	if g.cfg.HostTransport == hostTransportCloudflareTunnel {
+		// The overlay address stays the host's identity; only the path to it
+		// changes (ADR 0005). The tunnel hostname is derived, never looked up.
+		host := hostTunnelLabel(address) + "." + g.cfg.HostTunnelDomain
+		return &url.URL{Scheme: "https", Host: host}, net.JoinHostPort(host, "443"), nil
+	}
 	host := net.JoinHostPort(address.String(), strconv.Itoa(g.cfg.HostPort))
 	return &url.URL{Scheme: "http", Host: host}, host, nil
 }
@@ -426,6 +436,11 @@ func (g *gateway) hostTransport(expectedAddress string, bandwidth *byteLimiter, 
 	transport := newBaseTransport()
 	transport.ForceAttemptHTTP2 = false
 	transport.DisableKeepAlives = true
+	if g.cfg.HostTransport == hostTransportCloudflareTunnel {
+		// net/http performs the TLS handshake over the guarded dial below and
+		// verifies the certificate against the derived tunnel hostname.
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		if address != expectedAddress {
@@ -451,6 +466,7 @@ func stripForwardingHeaders(header http.Header) {
 func stripSensitiveHostHeaders(header http.Header) {
 	for _, name := range []string{
 		"Authorization", "Proxy-Authorization", "Cookie", "X-API-Key", "X-Nehemiah-Upstream", "Cf-Access-Jwt-Assertion",
+		accessClientIDHeader, accessClientSecretHeader,
 	} {
 		header.Del(name)
 	}

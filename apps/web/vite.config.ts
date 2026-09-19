@@ -2,7 +2,6 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 import { loadEnv } from 'vite';
 import { playwright } from '@vitest/browser-playwright';
-import adapter from '@sveltejs/adapter-vercel';
 import { sveltekit } from '@sveltejs/kit/vite';
 
 // nehemiahd host daemon. Reads NEHEMIAH_URL / NEHEMIAH_TOKEN from apps/web/.env
@@ -29,8 +28,10 @@ export default defineConfig(({ mode }) => {
 					// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
 					runes: ({ filename }) =>
 						filename.split(/[/\\]/).includes('node_modules') ? undefined : true
-				},
-				adapter: adapter()
+				}
+				// No adapter here: `npm run deploy` (alchemy.run.ts) builds with
+				// Alchemy's Cloudflare Workers adapter. A plain `vite build` still
+				// type-checks and prerenders; it just has no platform to package for.
 			})
 		],
 		server: {

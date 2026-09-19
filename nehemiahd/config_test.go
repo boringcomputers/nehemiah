@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -170,5 +171,37 @@ func TestLocalOverlayQuotaRetainsSmallerDefault(t *testing.T) {
 	t.Setenv("BORING_OVERLAY_QUOTA_MB", "")
 	if got := LoadConfig().OverlayQuotaMB; got != 8192 {
 		t.Fatalf("local OverlayQuotaMB = %d, want 8192", got)
+	}
+}
+
+func TestManagedModeControlPlaneAccessTokenIsOptionalButPaired(t *testing.T) {
+	t.Setenv("NEHEMIAH_MODE", "1")
+	t.Setenv("NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_ID", "")
+	t.Setenv("NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_SECRET", "")
+	if cfg := LoadConfig(); cfg.ControlPlaneAccessClientID != "" || cfg.ControlPlaneAccessClientSecret != "" {
+		t.Fatal("Access token must be empty when unset")
+	}
+
+	t.Setenv("NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_ID", "a1b2c3d4e5f6.access")
+	t.Setenv("NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	cfg := LoadConfig()
+	if cfg.ControlPlaneAccessClientID != "a1b2c3d4e5f6.access" || len(cfg.ControlPlaneAccessClientSecret) != 64 {
+		t.Fatalf("Access token not loaded: id=%q", cfg.ControlPlaneAccessClientID)
+	}
+
+	if validAccessCredential("with space") || validAccessCredential("short") || !validAccessCredential("a1b2c3d4e5f6.access") {
+		t.Fatal("Access credential validation is wrong")
+	}
+	if err := validateControlPlaneAccessToken(cfg.ControlPlaneAccessClientID, cfg.ControlPlaneAccessClientSecret); err != nil {
+		t.Fatalf("a complete Access token must validate: %v", err)
+	}
+	if err := validateControlPlaneAccessToken("", ""); err != nil {
+		t.Fatalf("no Access token must validate: %v", err)
+	}
+	if err := validateControlPlaneAccessToken(cfg.ControlPlaneAccessClientID, ""); err == nil || !strings.Contains(err.Error(), "NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT") {
+		t.Fatalf("a lone Access client id must be rejected, got %v", err)
+	}
+	if err := validateControlPlaneAccessToken(cfg.ControlPlaneAccessClientID, "with space"); err == nil {
+		t.Fatal("a malformed Access secret must be rejected")
 	}
 }

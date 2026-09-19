@@ -1,7 +1,14 @@
-import { isIP } from 'node:net';
 import type { HostCredentialResolver } from '../domain/host-credentials.js';
 import { EgressPolicy, type NetworkPolicyDeclaration } from '../domain/network-policy.js';
 import { injectTraceHeaders } from '../telemetry.js';
+import {
+	hostBaseUrl,
+	hostTransportHeaders,
+	HostTransportError,
+	overlayTransport,
+	validateHostTransport,
+	type HostTransport
+} from './host-transport.js';
 
 export interface HostMachine {
 	readonly id: string;
@@ -112,15 +119,17 @@ export class HostForkContractError extends HostRequestError {
 }
 
 export class NehemiahdClient implements HostClient {
+	readonly #transport: HostTransport;
+
 	constructor(
 		private readonly credentials: string | HostCredentialResolver,
 		private readonly fetcher: typeof fetch = fetch,
 		private readonly requestTimeoutMs = 30_000,
-		private readonly hostPort = 8080
+		transport: number | HostTransport = 8080
 	) {
-		if (!Number.isSafeInteger(hostPort) || hostPort < 1 || hostPort > 65_535) {
-			throw new Error('host port must be between 1 and 65535');
-		}
+		this.#transport = validateHostTransport(
+			typeof transport === 'number' ? overlayTransport(transport) : transport
+		);
 	}
 
 	async create(address: string, request: CreateOnHostRequest): Promise<HostMachine> {
@@ -399,11 +408,15 @@ export class NehemiahdClient implements HostClient {
 		init: RequestInit = {},
 		timeoutMs = this.requestTimeoutMs
 	): Promise<T> {
-		const version = isIP(address);
-		if (version === 0) {
-			throw new HostRequestError(undefined, 'invalid host address', false);
+		let base: string;
+		try {
+			base = hostBaseUrl(address, this.#transport);
+		} catch (error) {
+			if (error instanceof HostTransportError) {
+				throw new HostRequestError(undefined, error.message, false);
+			}
+			throw error;
 		}
-		const base = `http://${version === 6 ? `[${address}]` : address}:${this.hostPort}`;
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
 		try {
@@ -415,6 +428,7 @@ export class NehemiahdClient implements HostClient {
 			headers.set('accept', 'application/json');
 			headers.set('content-type', 'application/json');
 			headers.set('authorization', `Bearer ${internalToken}`);
+			for (const [name, value] of hostTransportHeaders(this.#transport)) headers.set(name, value);
 			injectTraceHeaders(headers);
 			const response = await this.fetcher(`${base}${path}`, {
 				...init,

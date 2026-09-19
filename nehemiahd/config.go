@@ -39,15 +39,20 @@ type Config struct {
 	// to obtain a unique heartbeat credential. InternalToken is also unique per host and is
 	// sent at enrollment so the control plane can authenticate calls into this
 	// daemon without sharing a fleet-wide inbound secret.
-	ControlPlaneURL     string
-	FleetBootstrapToken string
-	AdvertiseAddress    string
-	ProviderID          string
-	EnrollmentPath      string
-	EnvironmentFile     string
-	HeartbeatInterval   time.Duration
-	ControlPlaneHTTP    bool
-	Telemetry           TelemetryConfig
+	ControlPlaneURL string
+	// Optional Cloudflare Access service token presented on every control-plane
+	// request when the control plane's internal routes sit behind Access
+	// (docs/nehemiah/adr/0005). Both values are set or neither is.
+	ControlPlaneAccessClientID     string
+	ControlPlaneAccessClientSecret string
+	FleetBootstrapToken            string
+	AdvertiseAddress               string
+	ProviderID                     string
+	EnrollmentPath                 string
+	EnvironmentFile                string
+	HeartbeatInterval              time.Duration
+	ControlPlaneHTTP               bool
+	Telemetry                      TelemetryConfig
 
 	// Listen address for the HTTP/WS server.
 	Addr string
@@ -207,87 +212,89 @@ func LoadConfig() Config {
 		cpuMaxPercentDefault = 100
 	}
 	c := Config{
-		NehemiahMode:            nehemiahMode,
-		HostID:                  getenv("NEHEMIAH_HOST_ID"),
-		Region:                  getenv("NEHEMIAH_REGION"),
-		Draining:                getenv("NEHEMIAH_DRAINING") == "1",
-		InternalToken:           credentialEnv(nehemiahMode, "NEHEMIAH_INTERNAL_TOKEN"),
-		StatePath:               envStr("NEHEMIAH_STATE_PATH", "/var/lib/nehemiahd/state.json"),
-		ControlPlaneURL:         getenv("NEHEMIAH_CONTROL_PLANE_URL"),
-		FleetBootstrapToken:     credentialEnv(nehemiahMode, "NEHEMIAH_FLEET_BOOTSTRAP_TOKEN"),
-		AdvertiseAddress:        getenv("NEHEMIAH_ADVERTISE_ADDRESS"),
-		ProviderID:              getenv("NEHEMIAH_PROVIDER_ID"),
-		EnrollmentPath:          envStr("NEHEMIAH_ENROLLMENT_PATH", "/var/lib/nehemiahd/enrollment.json"),
-		EnvironmentFile:         envStr("NEHEMIAH_ENV_FILE", "/etc/boring/nehemiahd.env"),
-		HeartbeatInterval:       time.Duration(envInt("NEHEMIAH_HEARTBEAT_SECONDS", 10)) * time.Second,
-		ControlPlaneHTTP:        getenv("NEHEMIAH_CONTROL_PLANE_ALLOW_HTTP") == "1",
-		Addr:                    envStr("NEHEMIAH_ADDR", "0.0.0.0:8080"),
-		Token:                   credentialEnv(nehemiahMode, "NEHEMIAH_TOKEN"),
-		CORSOrigin:              getenv("NEHEMIAH_CORS_ORIGIN"),
-		MaxMachines:             envInt("NEHEMIAH_MAX", 20),
-		MaxTemplates:            envInt("NEHEMIAH_MAX_TEMPLATES", 10),
-		MaxForks:                envInt("NEHEMIAH_MAX_FORKS", 8),
-		MaxForkOperations:       envInt("NEHEMIAH_MAX_FORK_OPERATIONS", 4096),
-		AllowPersistent:         getenv("NEHEMIAH_ALLOW_PERSISTENT") == "1",
-		MemReserveMB:            envInt("NEHEMIAH_MEM_RESERVE_MB", 3072),
-		FirecrackerBin:          envStr("NEHEMIAH_FIRECRACKER_BIN", "/opt/boring/bin/firecracker"),
-		SystemdRunBin:           envStr("NEHEMIAH_SYSTEMD_RUN_BIN", "/usr/bin/systemd-run"),
-		SystemctlBin:            envStr("NEHEMIAH_SYSTEMCTL_BIN", "/usr/bin/systemctl"),
-		KernelPath:              envStr("NEHEMIAH_KERNEL", "/opt/boring/kernel/vmlinux"),
-		BaseRootfs:              envStr("NEHEMIAH_ROOTFS", "/opt/boring/rootfs/rootfs.ext4"),
-		DesktopRootfs:           envStr("NEHEMIAH_DESKTOP_ROOTFS", "/opt/boring/rootfs/desktop.ext4"),
-		TemplatesDir:            envStr("NEHEMIAH_TEMPLATES", "/opt/boring/templates"),
-		RunDir:                  envStr("NEHEMIAH_RUN", "/opt/boring/run"),
-		TemplateObjectOrigin:    getenv("NEHEMIAH_TEMPLATE_OBJECT_ORIGIN"),
-		TemplateObjectAllowHTTP: getenv("NEHEMIAH_TEMPLATE_OBJECT_ALLOW_HTTP") == "1",
-		DefaultTTL:              120,
-		MinTTL:                  15,
-		MaxTTL:                  envInt("NEHEMIAH_MAX_TTL", maxTTLDefault),
-		VCPUs:                   1,
-		MemSizeMB:               256,
-		MaxVCPUsPerMachine:      envInt("NEHEMIAH_MAX_VCPUS_PER_MACHINE", 4),
-		MaxMemoryMBPerMachine:   envInt("NEHEMIAH_MAX_MEMORY_MB_PER_MACHINE", 4096),
-		PerIPMax:                envInt("NEHEMIAH_PER_IP_MAX", 2),
-		CreateRatePerMin:        envInt("NEHEMIAH_CREATE_RATE", 8),
-		TrustProxy:              getenv("NEHEMIAH_TRUST_PROXY") == "1",
-		CgroupEnable:            getenv("NEHEMIAH_CGROUP") != "0",
-		CPUMaxPercent:           envInt("NEHEMIAH_CPU_MAX_PCT", cpuMaxPercentDefault),
-		PidsMax:                 envInt("NEHEMIAH_PIDS_MAX", 512),
-		IOReadBPS:               envInt64("NEHEMIAH_IO_READ_BPS", 64*1024*1024),
-		IOWriteBPS:              envInt64("NEHEMIAH_IO_WRITE_BPS", 64*1024*1024),
-		OverlayQuotaMB:          envInt("NEHEMIAH_OVERLAY_QUOTA_MB", overlayQuotaDefault),
-		NetEnable:               getenv("NEHEMIAH_NET") == "1",
-		NetBridge:               envStr("NEHEMIAH_NET_BRIDGE", "boring0"),
-		NetSubnet:               envStr("NEHEMIAH_NET_SUBNET", "10.200.0"),
-		EgressDNSUpstream:       envStr("NEHEMIAH_EGRESS_DNS_UPSTREAM", "1.1.1.1:53"),
-		EgressDenyCIDRs:         envCSV("NEHEMIAH_EGRESS_DENY_CIDRS"),
-		PreviewBase:             getenv("NEHEMIAH_PREVIEW_BASE"), // deployment-specific; unset disables previews
-		LeasesPath:              envStr("NEHEMIAH_LEASES", "/var/lib/misc/dnsmasq.leases"),
-		S3Endpoint:              getenv("NEHEMIAH_S3_ENDPOINT"),
-		S3Key:                   getenv("NEHEMIAH_S3_KEY"),
-		S3Secret:                getenv("NEHEMIAH_S3_SECRET"),
-		S3Bucket:                envStr("NEHEMIAH_S3_BUCKET", "boring-volumes"),
-		S3Region:                getenv("NEHEMIAH_S3_REGION"),
-		S3UseSSL:                getenv("NEHEMIAH_S3_SSL") == "1",
-		VolumeQuotaMB:           envInt("NEHEMIAH_VOLUME_QUOTA_MB", 256),
-		VolumeTTLDefault:        envInt("NEHEMIAH_VOLUME_TTL", 86400),
-		VolumeTTLMax:            envInt("NEHEMIAH_VOLUME_TTL_MAX", 604800),
-		VolumeRatePerMin:        envInt("NEHEMIAH_VOLUME_RATE", 10),
-		DesktopPool:             envInt("NEHEMIAH_DESKTOP_POOL", 1),
-		OpenRouterKey:           getenv("NEHEMIAH_OPENROUTER_KEY"),
-		InferenceMaxTokens:      envInt("NEHEMIAH_INFER_MAX_TOKENS", 1024),
-		InferenceRatePerMin:     envInt("NEHEMIAH_INFER_RATE", 20),
-		DailyAgentMax:           envInt("NEHEMIAH_DAILY_AGENT_MAX", 200),
-		DailyInferMax:           envInt("NEHEMIAH_DAILY_INFER_MAX", 3000),
-		AnthropicKey:            getenv("NEHEMIAH_ANTHROPIC_KEY"),
-		AgentModel:              envStr("NEHEMIAH_AGENT_MODEL", "claude-opus-4-8"),
-		AgentMaxSteps:           envInt("NEHEMIAH_AGENT_MAX_STEPS", 30),
-		AgentMaxConcurrent:      envInt("NEHEMIAH_AGENT_MAX_CONCURRENT", 2),
-		JailerEnable:            getenv("NEHEMIAH_JAILER") == "1",
-		JailerBin:               envStr("NEHEMIAH_JAILER_BIN", "/opt/boring/bin/jailer"),
-		JailerUID:               envInt("NEHEMIAH_JAILER_UID", 30000),
-		JailerGID:               envInt("NEHEMIAH_JAILER_GID", 30000),
-		ChrootBase:              envStr("NEHEMIAH_CHROOT_BASE", "/srv/jailer"),
+		NehemiahMode:                   nehemiahMode,
+		HostID:                         getenv("NEHEMIAH_HOST_ID"),
+		Region:                         getenv("NEHEMIAH_REGION"),
+		Draining:                       getenv("NEHEMIAH_DRAINING") == "1",
+		InternalToken:                  credentialEnv(nehemiahMode, "NEHEMIAH_INTERNAL_TOKEN"),
+		StatePath:                      envStr("NEHEMIAH_STATE_PATH", "/var/lib/nehemiahd/state.json"),
+		ControlPlaneURL:                getenv("NEHEMIAH_CONTROL_PLANE_URL"),
+		ControlPlaneAccessClientID:     strings.TrimSpace(credentialEnv(nehemiahMode, "NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_ID")),
+		ControlPlaneAccessClientSecret: strings.TrimSpace(credentialEnv(nehemiahMode, "NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_SECRET")),
+		FleetBootstrapToken:            credentialEnv(nehemiahMode, "NEHEMIAH_FLEET_BOOTSTRAP_TOKEN"),
+		AdvertiseAddress:               getenv("NEHEMIAH_ADVERTISE_ADDRESS"),
+		ProviderID:                     getenv("NEHEMIAH_PROVIDER_ID"),
+		EnrollmentPath:                 envStr("NEHEMIAH_ENROLLMENT_PATH", "/var/lib/nehemiahd/enrollment.json"),
+		EnvironmentFile:                envStr("NEHEMIAH_ENV_FILE", "/etc/boring/nehemiahd.env"),
+		HeartbeatInterval:              time.Duration(envInt("NEHEMIAH_HEARTBEAT_SECONDS", 10)) * time.Second,
+		ControlPlaneHTTP:               getenv("NEHEMIAH_CONTROL_PLANE_ALLOW_HTTP") == "1",
+		Addr:                           envStr("NEHEMIAH_ADDR", "0.0.0.0:8080"),
+		Token:                          credentialEnv(nehemiahMode, "NEHEMIAH_TOKEN"),
+		CORSOrigin:                     getenv("NEHEMIAH_CORS_ORIGIN"),
+		MaxMachines:                    envInt("NEHEMIAH_MAX", 20),
+		MaxTemplates:                   envInt("NEHEMIAH_MAX_TEMPLATES", 10),
+		MaxForks:                       envInt("NEHEMIAH_MAX_FORKS", 8),
+		MaxForkOperations:              envInt("NEHEMIAH_MAX_FORK_OPERATIONS", 4096),
+		AllowPersistent:                getenv("NEHEMIAH_ALLOW_PERSISTENT") == "1",
+		MemReserveMB:                   envInt("NEHEMIAH_MEM_RESERVE_MB", 3072),
+		FirecrackerBin:                 envStr("NEHEMIAH_FIRECRACKER_BIN", "/opt/boring/bin/firecracker"),
+		SystemdRunBin:                  envStr("NEHEMIAH_SYSTEMD_RUN_BIN", "/usr/bin/systemd-run"),
+		SystemctlBin:                   envStr("NEHEMIAH_SYSTEMCTL_BIN", "/usr/bin/systemctl"),
+		KernelPath:                     envStr("NEHEMIAH_KERNEL", "/opt/boring/kernel/vmlinux"),
+		BaseRootfs:                     envStr("NEHEMIAH_ROOTFS", "/opt/boring/rootfs/rootfs.ext4"),
+		DesktopRootfs:                  envStr("NEHEMIAH_DESKTOP_ROOTFS", "/opt/boring/rootfs/desktop.ext4"),
+		TemplatesDir:                   envStr("NEHEMIAH_TEMPLATES", "/opt/boring/templates"),
+		RunDir:                         envStr("NEHEMIAH_RUN", "/opt/boring/run"),
+		TemplateObjectOrigin:           getenv("NEHEMIAH_TEMPLATE_OBJECT_ORIGIN"),
+		TemplateObjectAllowHTTP:        getenv("NEHEMIAH_TEMPLATE_OBJECT_ALLOW_HTTP") == "1",
+		DefaultTTL:                     120,
+		MinTTL:                         15,
+		MaxTTL:                         envInt("NEHEMIAH_MAX_TTL", maxTTLDefault),
+		VCPUs:                          1,
+		MemSizeMB:                      256,
+		MaxVCPUsPerMachine:             envInt("NEHEMIAH_MAX_VCPUS_PER_MACHINE", 4),
+		MaxMemoryMBPerMachine:          envInt("NEHEMIAH_MAX_MEMORY_MB_PER_MACHINE", 4096),
+		PerIPMax:                       envInt("NEHEMIAH_PER_IP_MAX", 2),
+		CreateRatePerMin:               envInt("NEHEMIAH_CREATE_RATE", 8),
+		TrustProxy:                     getenv("NEHEMIAH_TRUST_PROXY") == "1",
+		CgroupEnable:                   getenv("NEHEMIAH_CGROUP") != "0",
+		CPUMaxPercent:                  envInt("NEHEMIAH_CPU_MAX_PCT", cpuMaxPercentDefault),
+		PidsMax:                        envInt("NEHEMIAH_PIDS_MAX", 512),
+		IOReadBPS:                      envInt64("NEHEMIAH_IO_READ_BPS", 64*1024*1024),
+		IOWriteBPS:                     envInt64("NEHEMIAH_IO_WRITE_BPS", 64*1024*1024),
+		OverlayQuotaMB:                 envInt("NEHEMIAH_OVERLAY_QUOTA_MB", overlayQuotaDefault),
+		NetEnable:                      getenv("NEHEMIAH_NET") == "1",
+		NetBridge:                      envStr("NEHEMIAH_NET_BRIDGE", "boring0"),
+		NetSubnet:                      envStr("NEHEMIAH_NET_SUBNET", "10.200.0"),
+		EgressDNSUpstream:              envStr("NEHEMIAH_EGRESS_DNS_UPSTREAM", "1.1.1.1:53"),
+		EgressDenyCIDRs:                envCSV("NEHEMIAH_EGRESS_DENY_CIDRS"),
+		PreviewBase:                    getenv("NEHEMIAH_PREVIEW_BASE"), // deployment-specific; unset disables previews
+		LeasesPath:                     envStr("NEHEMIAH_LEASES", "/var/lib/misc/dnsmasq.leases"),
+		S3Endpoint:                     getenv("NEHEMIAH_S3_ENDPOINT"),
+		S3Key:                          getenv("NEHEMIAH_S3_KEY"),
+		S3Secret:                       getenv("NEHEMIAH_S3_SECRET"),
+		S3Bucket:                       envStr("NEHEMIAH_S3_BUCKET", "boring-volumes"),
+		S3Region:                       getenv("NEHEMIAH_S3_REGION"),
+		S3UseSSL:                       getenv("NEHEMIAH_S3_SSL") == "1",
+		VolumeQuotaMB:                  envInt("NEHEMIAH_VOLUME_QUOTA_MB", 256),
+		VolumeTTLDefault:               envInt("NEHEMIAH_VOLUME_TTL", 86400),
+		VolumeTTLMax:                   envInt("NEHEMIAH_VOLUME_TTL_MAX", 604800),
+		VolumeRatePerMin:               envInt("NEHEMIAH_VOLUME_RATE", 10),
+		DesktopPool:                    envInt("NEHEMIAH_DESKTOP_POOL", 1),
+		OpenRouterKey:                  getenv("NEHEMIAH_OPENROUTER_KEY"),
+		InferenceMaxTokens:             envInt("NEHEMIAH_INFER_MAX_TOKENS", 1024),
+		InferenceRatePerMin:            envInt("NEHEMIAH_INFER_RATE", 20),
+		DailyAgentMax:                  envInt("NEHEMIAH_DAILY_AGENT_MAX", 200),
+		DailyInferMax:                  envInt("NEHEMIAH_DAILY_INFER_MAX", 3000),
+		AnthropicKey:                   getenv("NEHEMIAH_ANTHROPIC_KEY"),
+		AgentModel:                     envStr("NEHEMIAH_AGENT_MODEL", "claude-opus-4-8"),
+		AgentMaxSteps:                  envInt("NEHEMIAH_AGENT_MAX_STEPS", 30),
+		AgentMaxConcurrent:             envInt("NEHEMIAH_AGENT_MAX_CONCURRENT", 2),
+		JailerEnable:                   getenv("NEHEMIAH_JAILER") == "1",
+		JailerBin:                      envStr("NEHEMIAH_JAILER_BIN", "/opt/boring/bin/jailer"),
+		JailerUID:                      envInt("NEHEMIAH_JAILER_UID", 30000),
+		JailerGID:                      envInt("NEHEMIAH_JAILER_GID", 30000),
+		ChrootBase:                     envStr("NEHEMIAH_CHROOT_BASE", "/srv/jailer"),
 		RuntimeCohort: managedRuntimeCohort{
 			ID:                  getenv("NEHEMIAH_RUNTIME_COHORT_ID"),
 			ContractVersion:     envInt("NEHEMIAH_RUNTIME_CONTRACT_VERSION", 0),
@@ -442,6 +449,9 @@ func (c Config) Validate() error {
 	}
 	if controlURL.Scheme != "https" && !c.ControlPlaneHTTP {
 		return fmt.Errorf("NEHEMIAH_CONTROL_PLANE_URL must use https (set NEHEMIAH_CONTROL_PLANE_ALLOW_HTTP=1 only on a private development network)")
+	}
+	if err := validateControlPlaneAccessToken(c.ControlPlaneAccessClientID, c.ControlPlaneAccessClientSecret); err != nil {
+		return err
 	}
 	advertiseIP := net.ParseIP(c.AdvertiseAddress)
 	if advertiseIP == nil || !advertiseIP.IsPrivate() || advertiseIP.IsLoopback() || advertiseIP.IsUnspecified() {
@@ -704,6 +714,32 @@ func getenv(key string) string {
 		return os.Getenv("BORING_" + legacy)
 	}
 	return ""
+}
+
+// validateControlPlaneAccessToken accepts either no Cloudflare Access service
+// token or a complete, well-formed one (docs/nehemiah/adr/0005).
+func validateControlPlaneAccessToken(clientID, clientSecret string) error {
+	if (clientID == "") != (clientSecret == "") {
+		return fmt.Errorf("NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_ID and NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_SECRET must be set together")
+	}
+	if clientID != "" && (!validAccessCredential(clientID) || !validAccessCredential(clientSecret)) {
+		return fmt.Errorf("NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_ID and NEHEMIAH_CONTROL_PLANE_ACCESS_CLIENT_SECRET must be printable, unpadded Access service-token values")
+	}
+	return nil
+}
+
+// validAccessCredential accepts the opaque Cloudflare Access service-token
+// client id and secret: printable ASCII without whitespace, bounded in length.
+func validAccessCredential(value string) bool {
+	if len(value) < 8 || len(value) > 512 {
+		return false
+	}
+	for _, character := range value {
+		if character < '!' || character > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 // credentialEnv deliberately disables BORING_* fallback in managed mode. A

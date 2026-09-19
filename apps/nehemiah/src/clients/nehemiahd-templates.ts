@@ -1,4 +1,3 @@
-import { isIP } from 'node:net';
 import { HostRequestError } from './nehemiahd.js';
 import type { HostCredentialResolver } from '../domain/host-credentials.js';
 import {
@@ -8,6 +7,14 @@ import {
 } from '../domain/templates.js';
 import type { TemplateActivator } from '../jobs/replicate-template.js';
 import { injectTraceHeaders } from '../telemetry.js';
+import {
+	hostBaseUrl,
+	hostTransportHeaders,
+	HostTransportError,
+	overlayTransport,
+	validateHostTransport,
+	type HostTransport
+} from './host-transport.js';
 
 const exportIdPattern = /^te_[0-9a-f]{32}$/;
 const hostTemplatePattern = /^t-[0-9a-f]{29}$/;
@@ -128,20 +135,22 @@ export const templateObjectOrigins = (input: {
 export class NehemiahdTemplateClient implements TemplatePublisher, TemplateActivator {
 	readonly #origins: ReadonlySet<string>;
 
+	readonly #transport: HostTransport;
+
 	constructor(
 		private readonly credentials: HostCredentialResolver,
 		allowedObjectOrigins: ReadonlyArray<string>,
 		private readonly fetcher: typeof fetch = fetch,
 		private readonly requestTimeoutMs = 15 * 60 * 1_000,
-		private readonly hostPort = 8080
+		transport: number | HostTransport = 8080
 	) {
 		this.#origins = normalizedOrigins(allowedObjectOrigins);
 		if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1_000) {
 			throw new Error('template host timeout must be at least one second');
 		}
-		if (!Number.isSafeInteger(hostPort) || hostPort < 1 || hostPort > 65_535) {
-			throw new Error('host port must be between 1 and 65535');
-		}
+		this.#transport = validateHostTransport(
+			typeof transport === 'number' ? overlayTransport(transport) : transport
+		);
 	}
 
 	async export(input: Parameters<TemplatePublisher['export']>[0]) {
@@ -243,10 +252,16 @@ export class NehemiahdTemplateClient implements TemplatePublisher, TemplateActiv
 	}
 
 	async #request<T>(address: string, path: string, init: RequestInit): Promise<T> {
-		const version = isIP(address);
-		if (version === 0) throw new HostRequestError(undefined, 'invalid host address', false);
+		let base: string;
+		try {
+			base = hostBaseUrl(address, this.#transport);
+		} catch (error) {
+			if (error instanceof HostTransportError) {
+				throw new HostRequestError(undefined, error.message, false);
+			}
+			throw error;
+		}
 		const credential = await this.credentials.resolve(address);
-		const base = `http://${version === 6 ? `[${address}]` : address}:${this.hostPort}`;
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 		try {
@@ -254,6 +269,7 @@ export class NehemiahdTemplateClient implements TemplatePublisher, TemplateActiv
 			headers.set('accept', 'application/json');
 			headers.set('content-type', 'application/json');
 			headers.set('authorization', `Bearer ${credential}`);
+			for (const [name, value] of hostTransportHeaders(this.#transport)) headers.set(name, value);
 			injectTraceHeaders(headers);
 			const response = await this.fetcher(`${base}${path}`, {
 				...init,

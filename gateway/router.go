@@ -219,9 +219,17 @@ func newGateway(cfg Config, runtimes ...*gatewayTelemetry) (*gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport, err := newControlPlaneTransport(cfg)
+	baseTransport, err := newControlPlaneTransport(cfg)
 	if err != nil {
 		return nil, err
+	}
+	var transport http.RoundTripper = baseTransport
+	if cfg.ControlPlaneAccessClientID != "" {
+		transport = &accessHeaderTransport{
+			next:         baseTransport,
+			clientID:     cfg.ControlPlaneAccessClientID,
+			clientSecret: cfg.ControlPlaneAccessClientSecret,
+		}
 	}
 	telemetry := &gatewayTelemetry{}
 	if len(runtimes) > 0 && runtimes[0] != nil {

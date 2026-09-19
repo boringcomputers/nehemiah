@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 #
-# deploy-web.sh - Deploy apps/web to production.
+# deploy-web.sh - Deploy apps/web (boringcomputers.com) to Cloudflare Workers.
 #
-# Just pushes main. Vercel's git integration builds the SvelteKit app (Root
-# Directory = apps/web) and auto-promotes boringcomputers.com + www to the new
-# production deployment — no manual aliasing needed (the domains are configured
-# as the project's production domains, so they follow the latest prod deploy).
+# Default: push main. The "Deploy web" GitHub Actions workflow then runs
+# `alchemy deploy --stage prod` from apps/web (apps/web/alchemy.run.ts), which
+# builds the SvelteKit app, uploads the Worker, and reconciles the edge
+# resources (custom domain, origin tunnel, DNS, analytics, R2).
 #
-# Do NOT run `vercel` from the repo root — that builds via turbo and can't find
-# the adapter output ("No Output Directory named public"). The git integration
-# is the only correct deploy path for this monorepo.
+#   infra/latitude/deploy-web.sh          # push main; CI deploys
+#   infra/latitude/deploy-web.sh --local  # deploy prod from this machine
+#
+# --local needs a Cloudflare profile (`npx alchemy profile edit --add Cloudflare`
+# inside apps/web) and shares state with CI through the Cloudflare state store,
+# so mixing the two is safe. See docs/cloudflare.md.
 #
 set -euo pipefail
 
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+
+if [[ "${1:-}" == "--local" ]]; then
+  cd "$ROOT/apps/web"
+  exec npm run deploy -- --stage prod
+fi
+
 git -C "$ROOT" push origin main
-echo "Pushed. Vercel is building + auto-promoting to boringcomputers.com."
-echo "Watch: https://vercel.com/goshen-labs/boring-computers"
+echo "Pushed. The 'Deploy web' workflow is deploying boringcomputers.com."
+echo "Watch: https://github.com/boringcomputers/nehemiah/actions/workflows/deploy-web.yml"

@@ -187,7 +187,7 @@ const start = async (): Promise<void> => {
 		new PostgresHostCredentialResolver(database, hostCredentialCipher),
 		fetch,
 		30_000,
-		config.hostPort
+		config.hostTransport
 	);
 	const templateTransferClient =
 		config.templateTransfers && config.objectStorage
@@ -200,7 +200,7 @@ const start = async (): Promise<void> => {
 					}),
 					fetch,
 					config.templateTransfers.hostTimeoutMs,
-					config.hostPort
+					config.hostTransport
 				)
 			: undefined;
 	const usage = new UsageLedger(database);
